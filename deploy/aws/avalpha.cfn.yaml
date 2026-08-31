@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  avalpha — single EC2 instance running the collectors (systemd timers), the
+  scorer worker, and the 6am PT digest. SQLite lives on the instance's gp3
+  root volume. Secrets come from SSM Parameter Store via the instance role;
+  admin is via SSM Session Manager (no inbound ports).
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    Description: ARM Graviton instance. t4g.small (2 GiB) is comfortable for WeasyPrint + the scorer.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the security group.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet with outbound internet (public subnet, or private + NAT). SSM Session Manager needs outbound 443.
+  AssignPublicIp:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set true for a public subnet (no NAT gateway needed).
+  RootVolumeSizeGb:
+    Type: Number
+    Default: 20
+    Description: gp3 root volume size. Holds the SQLite DB, digests, and logs.
+  SsmPathPrefix:
+    Type: String
+    Default: /avalpha/env
+    Description: SSM Parameter Store path holding the secrets (see README — create these before deploying).
+  GitRepoUrl:
+    Type: String
+    Description: Git URL the instance clones to /opt/avalpha (public repo, or CodeCommit reachable by the instance role).
+  GitBranch:
+    Type: String
+    Default: main
+  EmailRecipient:
+    Type: String
+    Default: you@example.com
+  EmailSender:
+    Type: String
+    Default: avalpha <notifications@example.com>
+    Description: Gmail account that owns GMAIL_APP_PASSWORD; used as From header and SMTP login.
+
+Resources:
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Enables SSM Session Manager (SSH-free admin).
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-avalpha-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParametersByPath
+                  - ssm:GetParameters
+                  - ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPathPrefix}/*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # No inbound rules — everything the app does is outbound. Egress is left at
+  # the default allow-all so SSM, the data sources, and Gmail SMTP work.
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: avalpha - outbound only, no inbound
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: allow all outbound
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      # Latest Amazon Linux 2023 ARM64 AMI, resolved at deploy time.
+      ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64}}"
+      IamInstanceProfile: !Ref InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref RootVolumeSizeGb
+            DeleteOnTermination: true
+            Encrypted: true
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref SubnetId
+          AssociatePublicIpAddress: !Ref AssignPublicIp
+          GroupSet: [!Ref SecurityGroup]
+      Tags:
+        - Key: Name
+          Value: avalpha
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          # --- native deps (WeasyPrint needs pango/cairo + fonts) ---
+          dnf -y update
+          dnf -y install git python3.11 python3.11-pip \
+            pango cairo gdk-pixbuf2 libffi dejavu-sans-fonts
+
+          # --- code + service account ---
+          mkdir -p /opt/avalpha
+          git clone --branch ${GitBranch} ${GitRepoUrl} /opt/avalpha
+          useradd --system --home /opt/avalpha --shell /usr/sbin/nologin avalpha || true
+          mkdir -p /opt/avalpha/data/digests
+          python3.11 -m venv /opt/avalpha/.venv
+          /opt/avalpha/.venv/bin/pip install -e /opt/avalpha
+
+          # --- config.toml (gitignored, so generated here) ---
+          cat > /opt/avalpha/config.toml <<CFG
+          [storage]
+          db_path = "/opt/avalpha/data/avalpha.db"
+          digest_dir = "/opt/avalpha/data/digests"
+
+          [email]
+          recipient = "${EmailRecipient}"
+          sender = "${EmailSender}"
+
+          [reddit]
+          subreddits = ["stocks", "investing", "wallstreetbets", "StockMarket", "options"]
+
+          [models]
+          confirm = "claude-haiku-4-5"
+          scorer = "claude-haiku-4-5"
+          narrative = "claude-sonnet-4-6"
+          CFG
+
+          # --- secrets: SSM Parameter Store -> /etc/avalpha/env ---
+          mkdir -p /etc/avalpha
+          PREFIX="${SsmPathPrefix}"
+          : > /etc/avalpha/env
+          aws ssm get-parameters-by-path --path "${!PREFIX}" --with-decryption \
+            --recursive --region "${AWS::Region}" \
+            --query 'Parameters[].[Name,Value]' --output text \
+            | while IFS=$'\t' read -r name value; do
+                echo "${!name##*/}=${!value}" >> /etc/avalpha/env
+              done
+          chmod 600 /etc/avalpha/env
+          chown avalpha:avalpha /etc/avalpha/env
+
+          chown -R avalpha:avalpha /opt/avalpha
+
+          # --- systemd units ---
+          cp /opt/avalpha/systemd/*.service /opt/avalpha/systemd/*.timer /etc/systemd/system/
+          systemctl daemon-reload
+          systemctl enable --now \
+            avalpha-edgar.timer avalpha-ir.timer avalpha-gnews.timer \
+            avalpha-reddit.timer avalpha-prices.timer avalpha-matcher.timer \
+            avalpha-scorer.service avalpha-digest.timer
+
+          echo "avalpha bootstrap complete"
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+  SessionManagerCommand:
+    Description: Open an admin shell (no SSH key needed).
+    Value: !Sub aws ssm start-session --target ${Instance} --region ${AWS::Region}

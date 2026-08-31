@@ -1,0 +1,9 @@
+[Unit]
+Description=avalpha morning digest timer (6:00am Pacific)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00 America/Los_Angeles
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=avalpha Reddit collector (one cycle)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=avalpha
+EnvironmentFile=/etc/avalpha/env
+ExecStart=/opt/avalpha/.venv/bin/avalpha run-collector reddit

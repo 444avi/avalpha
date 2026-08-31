@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {
+    size: letter;
+    margin: 18mm 16mm;
+    @bottom-right { content: "avalpha — {{ label_date }} — page " counter(page); font-size: 8pt; color: #888; }
+  }
+  body { font-family: Helvetica, Arial, sans-serif; font-size: 10pt; color: #1a1a1a; }
+  h1 { font-size: 22pt; margin: 0 0 4pt 0; }
+  h2 { font-size: 15pt; margin: 0; }
+  h3 { font-size: 10pt; text-transform: uppercase; letter-spacing: 0.08em; color: #666; margin: 14pt 0 4pt 0; }
+  .cover { page-break-after: always; }
+  .cover .meta { color: #666; margin-bottom: 18pt; }
+  .holding { page-break-before: always; }
+  .header { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2pt solid #1a1a1a; padding-bottom: 4pt; }
+  .price { font-size: 13pt; font-weight: bold; }
+  .up { color: #0a7a33; }
+  .down { color: #b02020; }
+  .flat { color: #666; }
+  .narrative { margin: 10pt 0; line-height: 1.45; }
+  .quiet { color: #666; font-style: italic; margin: 10pt 0; }
+  ul.items { padding-left: 14pt; margin: 4pt 0; }
+  ul.items li { margin-bottom: 5pt; line-height: 1.35; }
+  .src { color: #888; font-size: 8pt; }
+  .mat { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 4pt; border-radius: 3pt; background: #eee; color: #444; }
+  .mat.high { background: #fde3e3; color: #b02020; }
+  .unusual { background: #f7f6f2; padding: 8pt 10pt; border-radius: 4pt; }
+  .unusual p { margin: 2pt 0; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>avalpha morning digest</h1>
+  <div class="meta">Covering {{ label_date }} &middot; built {{ built_at }} UTC &middot; {{ holdings|length }} holdings</div>
+  <h3>Portfolio</h3>
+  <div class="narrative">{{ cover_text }}</div>
+</div>
+
+{% for h in holdings %}
+<div class="holding">
+  <div class="header">
+    <h2>{{ h.ticker }} <span style="font-weight:normal; font-size:10pt; color:#666;">{{ h.name }}</span></h2>
+    {% if h.close is not none %}
+      <div class="price {{ h.direction }}">
+        {{ "%.2f"|format(h.close) }}
+        {% if h.pct is not none %}({{ "%+.2f"|format(h.pct) }}%){% endif %}
+      </div>
+    {% else %}
+      <div class="price flat">no price data</div>
+    {% endif %}
+  </div>
+
+  {% if h.narrative %}
+    <div class="narrative">{{ h.narrative }}</div>
+  {% else %}
+    <div class="quiet">Quiet day — nothing material.</div>
+  {% endif %}
+
+  {% if h.bullets %}
+  <h3>Items</h3>
+  <ul class="items">
+    {% for it in h.bullets %}
+    <li>
+      <span class="mat {{ 'high' if it.materiality >= 6 else '' }}">{{ it.materiality }}</span>
+      {{ it.summary }}
+      <span class="src">[{{ it.source }} &middot; {{ it.when }} &middot; {{ it.category }} &middot; {{ it.mechanism }}]</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3>Unusual</h3>
+  <div class="unusual">
+    {% if h.insider_filings %}
+      {% for f in h.insider_filings %}<p>Insider filing: {{ f }}</p>{% endfor %}
+    {% endif %}
+    <p>Reddit mentions: {{ h.reddit_count }} in window (trailing 7-day avg {{ "%.1f"|format(h.reddit_baseline) }}/day)</p>
+    {% if not h.insider_filings and h.reddit_count == 0 %}
+      <p>Nothing unusual.</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+</body>
+</html>

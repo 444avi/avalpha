@@ -1,0 +1,14 @@
+[Unit]
+Description=avalpha scoring worker (long-running)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=avalpha
+EnvironmentFile=/etc/avalpha/env
+ExecStart=/opt/avalpha/.venv/bin/avalpha run-scorer
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

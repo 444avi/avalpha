@@ -1,0 +1,10 @@
+[Unit]
+Description=avalpha morning digest (build and email)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=avalpha
+EnvironmentFile=/etc/avalpha/env
+ExecStart=/opt/avalpha/.venv/bin/avalpha send-digest

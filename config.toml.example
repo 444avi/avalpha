@@ -1,0 +1,36 @@
+# avalpha configuration. Copy to config.toml (next to this file) or set
+# AVALPHA_CONFIG to its path. Secrets live in the environment, not here —
+# see the [env] comment block at the bottom.
+
+[storage]
+# Use durable disk on the cloud host (e.g. an attached volume), not ephemeral
+# instance storage — the DB is the archive and must survive restarts.
+db_path = "/opt/avalpha/data/avalpha.db"
+digest_dir = "/opt/avalpha/data/digests"
+
+[email]
+recipient = "you@example.com"
+# Sent via Gmail's SMTP relay: the address here must be the Gmail account that
+# owns GMAIL_APP_PASSWORD (a display name is fine). It's used both as the From
+# header and the SMTP login.
+sender = "avalpha <notifications@example.com>"
+
+[reddit]
+subreddits = ["stocks", "investing", "wallstreetbets", "StockMarket", "options"]
+
+[models]
+# confirm: high-volume matcher yes/no. scorer: per-item materiality verdicts
+# (also high-volume). narrative: the few daily "what mattered" digest summaries
+# — kept on a stronger model since it's cheap at that volume and quality-critical.
+confirm = "claude-haiku-4-5"
+scorer = "claude-haiku-4-5"
+narrative = "claude-sonnet-4-6"
+
+# --- Environment variables (systemd EnvironmentFile=/etc/avalpha/env, or a
+#     local .env next to this file for development) ---
+# ANTHROPIC_API_KEY      required
+# FINNHUB_API_KEY        required for the prices collector
+# GMAIL_APP_PASSWORD     required for sending (test-digest works without it)
+# REDDIT_CLIENT_ID       required for the reddit collector
+# REDDIT_CLIENT_SECRET   required for the reddit collector
+# AVALPHA_CONTACT_EMAIL  required — goes in the SEC EDGAR User-Agent header

@@ -1,0 +1,10 @@
+[Unit]
+Description=avalpha Reddit collector timer
+
+[Timer]
+OnBootSec=180
+OnUnitActiveSec=900
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

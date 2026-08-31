@@ -1,0 +1,10 @@
+[Unit]
+Description=avalpha Google News collector timer
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=600
+AccuracySec=30
+
+[Install]
+WantedBy=timers.target

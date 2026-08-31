@@ -1,0 +1,12 @@
+[Unit]
+Description=avalpha price collector timer
+
+[Timer]
+# Every 6 hours; the DB primary key makes re-fetches harmless and the digest
+# only needs closes to be present by 6am PT.
+OnBootSec=300
+OnUnitActiveSec=21600
+AccuracySec=600
+
+[Install]
+WantedBy=timers.target
