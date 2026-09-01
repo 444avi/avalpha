@@ -16,6 +16,9 @@ class Config:
     model_confirm: str = "claude-haiku-4-5"
     model_scorer: str = "claude-haiku-4-5"
     model_narrative: str = "claude-sonnet-4-6"
+    web_host: str = "127.0.0.1"
+    web_port: int = 8000
+    web_fund_name: str = "The Silo Fund"
 
     @property
     def anthropic_api_key(self) -> str:
@@ -97,6 +100,7 @@ def load_config(path: Path | None = None) -> Config:
     email = raw.get("email", {})
     reddit = raw.get("reddit", {})
     models = raw.get("models", {})
+    web = raw.get("web", {})
 
     return Config(
         db_path=Path(storage.get("db_path", "~/avalpha-data/avalpha.db")).expanduser(),
@@ -107,4 +111,7 @@ def load_config(path: Path | None = None) -> Config:
         model_confirm=models.get("confirm", "claude-haiku-4-5"),
         model_scorer=models.get("scorer", "claude-haiku-4-5"),
         model_narrative=models.get("narrative", "claude-sonnet-4-6"),
+        web_host=web.get("host", "127.0.0.1"),
+        web_port=int(web.get("port", 8000)),
+        web_fund_name=web.get("fund_name", "The Silo Fund"),
     )

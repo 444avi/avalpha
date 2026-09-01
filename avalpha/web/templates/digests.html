@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Digests · {{ fund_name }}{% endblock %}
+{% block content %}
+<section class="hero hero-holding">
+  <p class="eyebrow">Morning digests</p>
+  <h1>The daily read.</h1>
+  <p class="lede">One PDF per trading day — a page per holding, what mattered and why.</p>
+</section>
+
+<section class="block">
+  <div class="block-head">
+    <p class="section-label">Archive</p>
+    <form method="post" action="/jobs/digest"><button class="btn btn-gold run" data-confirm="Build today's digest PDF now?">Build today's digest</button></form>
+  </div>
+  <div class="table-scroll">
+  <table class="grid">
+    <thead><tr><th>Date</th><th>Built</th><th>Emailed</th><th></th></tr></thead>
+    <tbody>
+      {% for d in digests %}
+      <tr>
+        <td class="tkr">{{ d.date }}</td>
+        <td class="muted">{{ d.built_at | shortdt }}</td>
+        <td class="{{ 'pos' if d.sent_at else 'muted' }}">{{ d.sent_at | shortdt if d.sent_at else 'not sent' }}</td>
+        <td class="num"><a class="btn btn-ghost small" href="/digests/{{ d.date }}.pdf">Download PDF</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No digests built yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

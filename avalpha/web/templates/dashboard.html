@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero">
+  <p class="eyebrow">Portfolio Console</p>
+  <h1>Conviction, tracked.</h1>
+  <p class="lede">Every holding under watch — positions, the signals moving them, and the health of the machine that finds them.</p>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-num">{{ holdings | selectattr('active') | list | length }}</span><span class="stat-label">Active holdings</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num">{{ '%g' % total_weight }}<span class="stat-unit">%</span></span><span class="stat-label">Weight allocated</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num">{{ health.queues.awaiting_scorer }}</span><span class="stat-label">Awaiting scorer</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num">{{ health.digest.date if health.digest else '—' }}</span><span class="stat-label">Latest digest</span></div>
+  </div>
+</section>
+
+<!-- PORTFOLIO -->
+<section class="block">
+  <div class="block-head">
+    <p class="section-label">Portfolio</p>
+    <form class="add-form" method="post" action="/holding/add">
+      <input name="ticker" placeholder="Add ticker (e.g. NVDA)" maxlength="6" autocomplete="off" required>
+      <button class="btn btn-gold" type="submit">Add holding</button>
+    </form>
+  </div>
+  <div class="table-scroll">
+  <table class="grid">
+    <thead>
+      <tr><th>Ticker</th><th>Name</th><th class="num">Weight</th><th class="num">Last</th><th class="num">Day</th><th class="num">Mkt cap</th><th class="num">7d signals</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for h in holdings %}
+      <tr class="{{ '' if h.active else 'inactive' }}">
+        <td><a class="tkr" href="/holding/{{ h.ticker }}">{{ h.ticker }}</a>{% if not h.active %} <span class="tag">inactive</span>{% endif %}</td>
+        <td class="name">{{ h.legal_name }}</td>
+        <td class="num">
+          <form class="weight-form" method="post" action="/holding/{{ h.ticker }}/weight">
+            <input class="weight-input" type="number" name="weight" step="0.1" min="0" max="100" value="{{ '%g' % h.weight }}" aria-label="{{ h.ticker }} weight">
+            <button class="mini" type="submit" title="Save weight">✓</button>
+          </form>
+        </td>
+        <td class="num">{% if h.price.close is not none %}${{ '%.2f' % h.price.close }}{% else %}—{% endif %}</td>
+        <td class="num {{ 'pos' if h.price.change_pct and h.price.change_pct > 0 else ('neg' if h.price.change_pct and h.price.change_pct < 0 else '') }}">{{ h.price.change_pct | pct }}</td>
+        <td class="num">{{ h.market_cap | money }}</td>
+        <td class="num">{{ h.scored_7d }}</td>
+        <td class="row-actions">
+          {% if h.active %}
+          <form method="post" action="/holding/{{ h.ticker }}/deactivate"><button class="mini danger" data-confirm="Deactivate {{ h.ticker }}? Historical data is kept.">Remove</button></form>
+          {% else %}
+          <form method="post" action="/holding/{{ h.ticker }}/activate"><button class="mini">Restore</button></form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No holdings yet — add a ticker to begin.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- PIPELINE HEALTH -->
+<section class="block">
+  <div class="block-head"><p class="section-label">Pipeline health</p></div>
+  <div class="tiles">
+    {% for c in health.collectors %}
+    <div class="tile {{ 'tile-ok' if c.ok else 'tile-warn' }}">
+      <div class="tile-top"><span class="tile-name">{{ c.source }}</span><span class="dot {{ 'dot-ok' if c.ok else 'dot-warn' }}"></span></div>
+      <div class="tile-main">{{ c.new_24h }}<span class="tile-sub">new / 24h</span></div>
+      <div class="tile-foot">last ok {{ c.last_ok | shortdt }}{% if c.errors_24h %} · {{ c.errors_24h }} err{% endif %}</div>
+      <form method="post" action="/jobs/collector:{{ c.source }}"><button class="mini run" data-confirm="Run the {{ c.source }} collector now?">Run</button></form>
+    </div>
+    {% endfor %}
+    <div class="tile tile-queue">
+      <div class="tile-top"><span class="tile-name">queues</span></div>
+      <div class="queue-line"><span>awaiting matcher</span><b>{{ health.queues.awaiting_matcher }}</b></div>
+      <div class="queue-line"><span>awaiting scorer</span><b>{{ health.queues.awaiting_scorer }}</b></div>
+      <div class="queue-line"><span>items total</span><b>{{ health.queues.total_items }}</b></div>
+      <div class="queue-runs">
+        <form method="post" action="/jobs/matcher"><button class="mini run" data-confirm="Run the matcher now?">match</button></form>
+        <form method="post" action="/jobs/scorer"><button class="mini run" data-confirm="Run the scorer now? This spends API tokens.">score</button></form>
+        <form method="post" action="/jobs/digest"><button class="mini run" data-confirm="Build today's digest PDF now?">digest</button></form>
+      </div>
+    </div>
+  </div>
+  {% if jobs %}
+  <details class="jobs">
+    <summary>Recent job runs</summary>
+    <table class="grid compact">
+      <tbody>
+        {% for j in jobs %}
+        <tr>
+          <td><code>{{ j.job }}</code></td>
+          <td class="{{ 'pos' if j.status == 'ok' else ('neg' if j.status == 'error' else '') }}">{{ j.status }}</td>
+          <td class="muted">{{ j.started_at | shortdt }}</td>
+          <td class="muted">{{ j.triggered_by }}</td>
+          <td class="job-out muted">{{ (j.output or '') | truncate(90) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+
+<!-- RECENT SIGNALS -->
+<section class="block">
+  <div class="block-head"><p class="section-label">Recent signals</p></div>
+  {% include "_signals.html" with context %}
+</section>
+
+{% endblock %}

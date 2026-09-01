@@ -1,0 +1,25 @@
+{% if scores %}
+<ul class="signals">
+  {% for s in scores %}
+  <li class="signal">
+    <div class="sig-left">
+      <span class="sig-mat m{{ ((s.materiality // 2) | int) }}">{{ s.materiality }}</span>
+      <span class="sig-dir {{ s.direction_class }}">{{ s.direction }}</span>
+    </div>
+    <div class="sig-body">
+      <div class="sig-head">
+        <a class="tkr" href="/holding/{{ s.ticker }}">{{ s.ticker }}</a>
+        <span class="sig-cat">{{ s.category }}</span>
+        <span class="sig-src">{{ s.source }}</span>
+        <span class="sig-time muted">{{ s.scored_at | shortdt }}</span>
+      </div>
+      <a class="sig-title" href="{{ s.url }}" target="_blank" rel="noopener">{{ s.title }}</a>
+      <p class="sig-mech">{{ s.mechanism }}</p>
+      {% if s.summary %}<p class="sig-sum muted">{{ s.summary }}</p>{% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="empty">No scored signals yet. Once collectors and the scorer have run, they show up here.</p>
+{% endif %}

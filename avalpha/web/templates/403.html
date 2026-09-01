@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Members only · {{ fund_name }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Space+Grotesk:wght@600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="denied-body">
+  <main class="denied">
+    <span class="mark big">TSF</span>
+    <p class="eyebrow">{{ fund_name }}</p>
+    <h1>Members only.</h1>
+    <p class="lede">This console is restricted to {{ fund_name }} members. Sign in through the fund's access portal to continue.</p>
+    <p class="denied-reason">{{ reason }}</p>
+  </main>
+</body>
+</html>

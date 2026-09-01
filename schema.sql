@@ -103,3 +103,16 @@ CREATE TABLE digests (
     sent_at  TEXT,
     pdf_path TEXT NOT NULL
 );
+
+-- Web console job runs: on-demand collector/matcher/scorer/digest triggers
+-- kicked from the UI. One row per trigger; the runner updates status on finish.
+CREATE TABLE IF NOT EXISTS web_jobs (
+    id           INTEGER PRIMARY KEY,
+    job          TEXT NOT NULL,     -- collector:edgar | matcher | scorer | digest | enrich:TICKER
+    status       TEXT NOT NULL,     -- running | ok | error
+    triggered_by TEXT,              -- member email from Cloudflare Access
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    output       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_web_jobs_started ON web_jobs (started_at);

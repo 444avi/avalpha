@@ -1,9 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   avalpha — single EC2 instance running the collectors (systemd timers), the
-  scorer worker, and the 6am PT digest. SQLite lives on the instance's gp3
-  root volume. Secrets come from SSM Parameter Store via the instance role;
-  admin is via SSM Session Manager (no inbound ports).
+  scorer worker, the 6am PT digest, the members-only web console (uvicorn on
+  loopback), and a Cloudflare Tunnel (cloudflared) that publishes the console.
+  SQLite lives on the instance's gp3 root volume. Secrets come from SSM
+  Parameter Store via the instance role; admin is via SSM Session Manager.
+  No inbound ports: the tunnel is outbound-only and Cloudflare Access gates it.
 
 Parameters:
   InstanceType:
@@ -42,6 +44,17 @@ Parameters:
     Type: String
     Default: avalpha <notifications@example.com>
     Description: Gmail account that owns GMAIL_APP_PASSWORD; used as From header and SMTP login.
+  WebFundName:
+    Type: String
+    Default: The Silo Fund
+    Description: Fund name shown in the web console header.
+  AppHostname:
+    Type: String
+    Default: avalpha.thesilofund.com
+    Description: >
+      Public hostname the Cloudflare Tunnel serves (informational — the actual
+      hostname->service mapping and Access policy are set in the Cloudflare Zero
+      Trust dashboard). Used only for the stack output.
 
 Resources:
   InstanceRole:
@@ -123,13 +136,18 @@ Resources:
           dnf -y install git python3.11 python3.11-pip \
             pango cairo gdk-pixbuf2 libffi dejavu-sans-fonts
 
+          # --- cloudflared (Cloudflare Tunnel; ARM64) ---
+          curl -fsSL -o /tmp/cloudflared.rpm \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.rpm
+          dnf -y install /tmp/cloudflared.rpm
+
           # --- code + service account ---
           mkdir -p /opt/avalpha
           git clone --branch ${GitBranch} ${GitRepoUrl} /opt/avalpha
           useradd --system --home /opt/avalpha --shell /usr/sbin/nologin avalpha || true
           mkdir -p /opt/avalpha/data/digests
           python3.11 -m venv /opt/avalpha/.venv
-          /opt/avalpha/.venv/bin/pip install -e /opt/avalpha
+          /opt/avalpha/.venv/bin/pip install -e "/opt/avalpha[web]"
 
           # --- config.toml (gitignored, so generated here) ---
           cat > /opt/avalpha/config.toml <<CFG
@@ -148,6 +166,11 @@ Resources:
           confirm = "claude-haiku-4-5"
           scorer = "claude-haiku-4-5"
           narrative = "claude-sonnet-4-6"
+
+          [web]
+          host = "127.0.0.1"
+          port = 8000
+          fund_name = "${WebFundName}"
           CFG
 
           # --- secrets: SSM Parameter Store -> /etc/avalpha/env ---
@@ -171,7 +194,8 @@ Resources:
           systemctl enable --now \
             avalpha-edgar.timer avalpha-ir.timer avalpha-gnews.timer \
             avalpha-reddit.timer avalpha-prices.timer avalpha-matcher.timer \
-            avalpha-scorer.service avalpha-digest.timer
+            avalpha-scorer.service avalpha-digest.timer \
+            avalpha-web.service cloudflared.service
 
           echo "avalpha bootstrap complete"
 
@@ -181,3 +205,6 @@ Outputs:
   SessionManagerCommand:
     Description: Open an admin shell (no SSH key needed).
     Value: !Sub aws ssm start-session --target ${Instance} --region ${AWS::Region}
+  ConsoleUrl:
+    Description: Members-only web console (served via the Cloudflare Tunnel + Access).
+    Value: !Sub https://${AppHostname}

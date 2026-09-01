@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% set h = d.holding %}
+{% block title %}{{ h.ticker }} · {{ fund_name }}{% endblock %}
+{% block content %}
+
+<section class="hero hero-holding">
+  <a class="back" href="/">← Portfolio</a>
+  <p class="eyebrow">{{ 'Active holding' if h.active else 'Inactive holding' }}</p>
+  <h1>{{ h.ticker }}</h1>
+  <p class="lede">{{ h.legal_name }}</p>
+  <div class="stat-row">
+    <div class="stat"><span class="stat-num">{% if d.price.close is not none %}${{ '%.2f' % d.price.close }}{% else %}—{% endif %}</span><span class="stat-label">Last close</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num {{ 'pos' if d.price.change_pct and d.price.change_pct > 0 else ('neg' if d.price.change_pct and d.price.change_pct < 0 else '') }}">{{ d.price.change_pct | pct }}</span><span class="stat-label">Day change</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num">{{ d.market_cap | money }}</span><span class="stat-label">Market cap</span></div>
+    <span class="stat-dot">·</span>
+    <div class="stat"><span class="stat-num">{{ '%g' % h.weight }}<span class="stat-unit">%</span></span><span class="stat-label">Target weight</span></div>
+  </div>
+</section>
+
+<section class="block cols">
+  <div class="col">
+    <p class="section-label">Entity</p>
+    <dl class="meta">
+      <dt>CIK</dt><dd>{{ h.cik }}</dd>
+      <dt>Confidence</dt><dd>{{ h.enrichment_confidence or '—' }}</dd>
+      <dt>IR feed</dt><dd>{{ 'yes' if h.ir_feed_status == 'ok' else 'none' }}</dd>
+      <dt>Shares out</dt><dd>{{ '{:,}'.format(h.shares_outstanding) if h.shares_outstanding else '—' }}</dd>
+      <dt>Aliases</dt><dd>{{ h.aliases | join(', ') or '—' }}</dd>
+      <dt>Products</dt><dd>{{ h.products | join(', ') or '—' }}</dd>
+      <dt>Executives</dt><dd>{{ h.executives | join(', ') or '—' }}</dd>
+    </dl>
+  </div>
+  <div class="col">
+    <p class="section-label">Position</p>
+    <form class="edit-weight" method="post" action="/holding/{{ h.ticker }}/weight">
+      <label>Target weight (%)</label>
+      <div class="weight-row">
+        <input type="number" name="weight" step="0.1" min="0" max="100" value="{{ '%g' % h.weight }}">
+        <button class="btn btn-gold" type="submit">Save</button>
+      </div>
+    </form>
+    <div class="pos-actions">
+      {% if h.active %}
+      <form method="post" action="/holding/{{ h.ticker }}/deactivate"><button class="btn btn-ghost danger" data-confirm="Deactivate {{ h.ticker }}? Historical data is kept.">Deactivate holding</button></form>
+      {% else %}
+      <form method="post" action="/holding/{{ h.ticker }}/activate"><button class="btn btn-ghost">Reactivate holding</button></form>
+      {% endif %}
+      <form method="post" action="/jobs/collector:gnews"><button class="btn btn-ghost run" data-confirm="Fetch fresh news across all holdings now?">Refresh news</button></form>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <div class="block-head"><p class="section-label">Signals · {{ h.ticker }}</p></div>
+  {% set scores = d.scores %}
+  {% include "_signals.html" with context %}
+</section>
+
+{% endblock %}

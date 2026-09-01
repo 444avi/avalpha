@@ -14,7 +14,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "pyjwt[crypto]>=2.8",
+    "httpx>=0.27",
+]
+dev = ["pytest>=8.0", "httpx>=0.27"]
 
 [project.scripts]
 avalpha = "avalpha.cli:main"
@@ -24,7 +32,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["avalpha", "avalpha.collectors", "avalpha.digest"]
+packages = ["avalpha", "avalpha.collectors", "avalpha.digest", "avalpha.web"]
 
 [tool.setuptools.package-data]
 "avalpha.digest" = ["*.html"]
+"avalpha.web" = ["templates/*.html", "static/*"]

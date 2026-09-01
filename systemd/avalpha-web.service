@@ -1,0 +1,16 @@
+[Unit]
+Description=avalpha web console (uvicorn, members-only ops UI)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=avalpha
+EnvironmentFile=/etc/avalpha/env
+# Bound to loopback only: the sole ingress is the Cloudflare Tunnel, so the
+# port is never exposed to the network or the instance's public interface.
+ExecStart=/opt/avalpha/.venv/bin/uvicorn avalpha.web.app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

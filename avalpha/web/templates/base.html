@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ fund_name }}{% endblock %} · Portfolio Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="/">
+      <span class="mark">TSF</span>
+      <span class="brand-name">{{ fund_name }}</span>
+    </a>
+    <nav class="nav-links">
+      <a href="/" class="{{ 'active' if path == '/' else '' }}">Dashboard</a>
+      <a href="/digests" class="{{ 'active' if path.startswith('/digests') else '' }}">Digests</a>
+    </nav>
+    <div class="nav-right">
+      {% if member %}<span class="member" title="{{ member }}">{{ member }}</span>{% endif %}
+      <a class="logout" href="/cdn-cgi/access/logout">Sign out</a>
+    </div>
+  </header>
+
+  {% if msg %}<div class="flash flash-ok" role="status">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="flash flash-err" role="alert">{{ err }}</div>{% endif %}
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="foot">
+    <span>© {{ fund_name }} · Portfolio Console</span>
+    <span class="sep">·</span>
+    <span>avalpha</span>
+  </footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

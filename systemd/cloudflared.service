@@ -1,0 +1,18 @@
+[Unit]
+Description=Cloudflare Tunnel for the avalpha web console
+Wants=network-online.target
+After=network-online.target avalpha-web.service
+
+[Service]
+User=avalpha
+# CLOUDFLARE_TUNNEL_TOKEN comes from SSM Parameter Store via /etc/avalpha/env.
+# The token identifies a remotely-managed tunnel; its public hostname ->
+# http://localhost:8000 mapping and the Access policy live in the Cloudflare
+# Zero Trust dashboard, not on the box. Outbound-only: no inbound ports.
+EnvironmentFile=/etc/avalpha/env
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
