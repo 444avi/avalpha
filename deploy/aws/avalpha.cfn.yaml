@@ -137,9 +137,11 @@ Resources:
             pango cairo gdk-pixbuf2 libffi dejavu-sans-fonts
 
           # --- cloudflared (Cloudflare Tunnel; ARM64) ---
-          curl -fsSL -o /tmp/cloudflared.rpm \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.rpm
-          dnf -y install /tmp/cloudflared.rpm
+          # Cloudflare ships a plain arm64 binary (no arm64 .rpm), so install it
+          # directly to /usr/bin/cloudflared (matches cloudflared.service).
+          curl -fsSL -o /usr/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +x /usr/bin/cloudflared
 
           # --- code + service account ---
           mkdir -p /opt/avalpha
