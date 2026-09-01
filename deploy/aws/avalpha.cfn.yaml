@@ -79,7 +79,11 @@ Resources:
                   - ssm:GetParametersByPath
                   - ssm:GetParameters
                   - ssm:GetParameter
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPathPrefix}/*
+                Resource:
+                  # GetParametersByPath authorizes against the path node itself,
+                  # GetParameter(s) against each child — grant both.
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPathPrefix}
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SsmPathPrefix}/*
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: "*"
