@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from avalpha import db, watchlist
+from avalpha import calendar_store, db, watchlist
+from avalpha.calendar_store import Event, is_bio
 from avalpha.config import Config, load_config
 from avalpha.web import queries
 from avalpha.web.auth import AccessDenied, Authenticator, extract_token, load_access_config
@@ -24,6 +25,17 @@ _HERE = Path(__file__).resolve().parent
 _VALID_JOBS = {"matcher", "scorer", "digest"} | {
     f"collector:{s}" for s in queries.SOURCES
 }
+# Kinds a member may create by hand (docs/calendar.md §3 "Manual"). `pdufa` is
+# offered only for bio holdings; the route double-checks the gate.
+_MANUAL_KINDS = {"manual", "pdufa", "analyst_day", "product_launch"}
+
+
+def _valid_date(s: str) -> bool:
+    try:
+        __import__("datetime").date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
 
 
 def create_app(config: Config | None = None) -> FastAPI:
@@ -103,6 +115,8 @@ def create_app(config: Config | None = None) -> FastAPI:
             scores=queries.recent_scores(conn, limit=25),
             jobs=queries.recent_jobs(conn),
             sources=queries.SOURCES,
+            upcoming=queries.upcoming_events(conn, days=7),
+            badges=queries.ticker_badges(conn),
         )
 
     @app.get("/holding/{ticker}", response_class=HTMLResponse)
@@ -110,7 +124,10 @@ def create_app(config: Config | None = None) -> FastAPI:
         detail = queries.holding_detail(conn, ticker.upper())
         if detail is None:
             return back("/", err=f"{ticker.upper()} is not on the watchlist.")
-        return render(request, "holding.html", m, d=detail)
+        events = queries.events_for_ticker(conn, ticker.upper())
+        is_bio_holding = is_bio(detail["holding"].industry)
+        return render(request, "holding.html", m, d=detail, events=events,
+                      is_bio=is_bio_holding)
 
     @app.post("/holding/add")
     def add_holding(request: Request, ticker: str = Form(...), m: str = Depends(member)):
@@ -154,6 +171,92 @@ def create_app(config: Config | None = None) -> FastAPI:
             return back("/", err=f"Unknown job '{job_key}'.")
         res = request.app.state.jobs.trigger(job_key, m)
         return back("/", msg=res.message) if res.accepted else back("/", err=res.message)
+
+    @app.get("/calendar", response_class=HTMLResponse)
+    def calendar(request: Request, conn=Depends(get_conn), m: str = Depends(member)):
+        show_passed = request.query_params.get("passed") == "1"
+        return render(
+            request,
+            "calendar.html",
+            m,
+            agenda=queries.calendar_agenda(conn, include_passed=show_passed),
+            holdings=[h for h in queries.portfolio(conn) if h["active"]],
+            show_passed=show_passed,
+        )
+
+    @app.post("/calendar/add")
+    def calendar_add(
+        request: Request,
+        title: str = Form(...),
+        event_date: str = Form(...),
+        kind: str = Form("manual"),
+        ticker: str = Form(""),
+        conn=Depends(get_conn),
+        m: str = Depends(member),
+    ):
+        kind = kind.strip().lower()
+        title = title.strip()
+        ticker = ticker.strip().upper() or None
+        if kind not in _MANUAL_KINDS:
+            return back("/calendar", err=f"'{kind}' is not a kind you can add by hand.")
+        if not title:
+            return back("/calendar", err="An event needs a title.")
+        if not _valid_date(event_date):
+            return back("/calendar", err="Date must be YYYY-MM-DD.")
+        if ticker and watchlist.get(conn, ticker) is None:
+            return back("/calendar", err=f"{ticker} is not on the watchlist.")
+        if kind == "pdufa" and not (ticker and is_bio(watchlist.get(conn, ticker).industry)):
+            return back("/calendar", err="PDUFA events are only for bio/pharma holdings.")
+        calendar_store.upsert_event(
+            conn,
+            Event(
+                kind=kind,
+                ticker=ticker,
+                title=title,
+                event_date=event_date,
+                status="scheduled",
+                source="manual",
+                confidence="high",
+                dedup_key=calendar_store.manual_key(),
+                meta={"added_by": m},
+            ),
+        )
+        conn.commit()
+        return back("/calendar", msg=f"Added “{title}”.")
+
+    @app.post("/calendar/{event_id:int}/edit")
+    def calendar_edit(
+        request: Request,
+        event_id: int,
+        title: str = Form(...),
+        event_date: str = Form(...),
+        conn=Depends(get_conn),
+        m: str = Depends(member),
+    ):
+        if calendar_store.get_event(conn, event_id) is None:
+            return back("/calendar", err="That event no longer exists.")
+        if not title.strip() or not _valid_date(event_date):
+            return back("/calendar", err="An event needs a title and a valid date.")
+        calendar_store.apply_manual_edit(
+            conn, event_id, title=title.strip(), event_date=event_date
+        )
+        conn.commit()
+        return back("/calendar", msg="Event updated.")
+
+    @app.post("/calendar/{event_id:int}/delete")
+    def calendar_delete(
+        request: Request, event_id: int, conn=Depends(get_conn), m: str = Depends(member)
+    ):
+        row = calendar_store.get_event(conn, event_id)
+        if row is None:
+            return back("/calendar", err="That event no longer exists.")
+        if row["source"] != "manual":
+            # Feed-owned rows would just reappear on the next refresh — a member
+            # deletes by editing (which converts to manual) then removing.
+            return back("/calendar", err="Only hand-entered events can be deleted.")
+        calendar_store.delete_event(conn, event_id)
+        conn.commit()
+        return back("/calendar", msg="Event deleted.")
 
     @app.get("/digests", response_class=HTMLResponse)
     def digest_list(request: Request, conn=Depends(get_conn), m: str = Depends(member)):

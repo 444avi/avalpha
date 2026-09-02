@@ -17,6 +17,7 @@
     </a>
     <nav class="nav-links">
       <a href="/" class="{{ 'active' if path == '/' else '' }}">Dashboard</a>
+      <a href="/calendar" class="{{ 'active' if path.startswith('/calendar') else '' }}">Calendar</a>
       <a href="/digests" class="{{ 'active' if path.startswith('/digests') else '' }}">Digests</a>
     </nav>
     <div class="nav-right">

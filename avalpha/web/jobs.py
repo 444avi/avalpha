@@ -138,6 +138,7 @@ class JobRunner:
             weight=0.0,
             shares_outstanding=result.shares_outstanding,
             enrichment_confidence=result.confidence,
+            industry=result.industry,
         )
         return (
             f"added {result.ticker} — {result.legal_name} "

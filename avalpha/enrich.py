@@ -18,6 +18,7 @@ from avalpha.config import Config
 
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+PROFILE2_URL = "https://finnhub.io/api/v1/stock/profile2"
 
 ENRICH_PROMPT = """\
 You are building watchlist metadata for a stock monitoring system. The system
@@ -57,6 +58,7 @@ class Enrichment:
     ir_feed_status: str = "none"
     confidence: str = "low"
     notes: str = ""
+    industry: str | None = None
 
 
 class EnrichmentError(Exception):
@@ -93,6 +95,22 @@ def fetch_shares_outstanding(cik: str, user_agent: str) -> int | None:
         return None
     latest = max(values, key=lambda v: v.get("end", ""))
     return int(latest["val"])
+
+
+def fetch_industry(config: Config, ticker: str) -> str | None:
+    """profile2.finnhubIndustry, for the calendar's bio (PDUFA) gate. Best-effort:
+    the matcher/digest don't depend on it, so any failure just yields None."""
+    try:
+        resp = requests.get(
+            PROFILE2_URL,
+            params={"symbol": ticker.upper(), "token": config.finnhub_api_key},
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            return None
+        return resp.json().get("finnhubIndustry") or None
+    except (requests.RequestException, RuntimeError, ValueError):
+        return None
 
 
 def _extract_json(text: str) -> dict:
@@ -168,6 +186,7 @@ def enrich(config: Config, ticker: str) -> Enrichment:
     confidence = data.get("confidence", "low")
     if confidence not in ("high", "medium", "low"):
         confidence = "low"
+    industry = fetch_industry(config, ticker)
 
     return Enrichment(
         ticker=ticker.upper(),
@@ -181,4 +200,5 @@ def enrich(config: Config, ticker: str) -> Enrichment:
         ir_feed_status="ok" if feed_url else "none",
         confidence=confidence,
         notes=data.get("notes", ""),
+        industry=industry,
     )

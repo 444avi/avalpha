@@ -112,6 +112,44 @@ def _insider_filings(conn, cik: str, start: str, end: str) -> list[str]:
     return out
 
 
+def _catalysts(conn: sqlite3.Connection, now: datetime, days: int = 7) -> list[dict]:
+    """"Catalysts — next `days` days": company events for active holdings + Tier A
+    macro only (no Tier B, docs/calendar.md §7). One rolling heads-up block."""
+    from datetime import date
+
+    from avalpha.calendar_store import KIND_LABELS, TIER_A_MACRO
+
+    today = now.date()
+    horizon = (today + timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        "SELECT c.* FROM calendar_events c "
+        "LEFT JOIN watchlist w ON w.ticker = c.ticker "
+        "WHERE (c.ticker IS NULL OR w.active = 1) "
+        "AND c.status IN ('scheduled','confirmed','tentative') "
+        "AND c.event_date >= ? AND c.event_date <= ? "
+        "ORDER BY c.event_date, c.is_timed DESC, c.ticker IS NULL, c.ticker",
+        (today.isoformat(), horizon),
+    ).fetchall()
+    out = []
+    for r in rows:
+        kind = r["kind"]
+        if r["ticker"] is None and kind not in TIER_A_MACRO:
+            continue  # digest carries Tier A macro only
+        meta = json.loads(r["meta_json"] or "{}")
+        when = {"amc": "after close", "bmo": "before open"}.get(meta.get("hour"), "")
+        out.append(
+            {
+                "date": date.fromisoformat(r["event_date"]).strftime("%a %b %-d"),
+                "ticker": r["ticker"],
+                "label": KIND_LABELS.get(kind, kind),
+                "title": r["title"],
+                "when": when,
+                "confirmed": r["status"] == "confirmed",
+            }
+        )
+    return out
+
+
 def _reddit_stats(conn, ticker: str, start: str, end: str) -> tuple[int, float]:
     window = conn.execute(
         "SELECT COALESCE(SUM(count), 0) FROM reddit_mentions "
@@ -206,6 +244,7 @@ def build_digest(
         built_at=end[:16].replace("T", " "),
         holdings=holdings_data,
         cover_text=cover_text,
+        catalysts=_catalysts(conn, now),
     )
 
     config.digest_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Calendar{% endblock %}
+{% block content %}
+
+<section class="hero">
+  <p class="eyebrow">Portfolio Console</p>
+  <h1>What&rsquo;s coming.</h1>
+  <p class="lede">Earnings, lockups, and the macro prints that move the tape — anticipated, not chased. Knowing <em>when</em> a catalyst lands; the pipeline handles <em>what happened</em>.</p>
+</section>
+
+<!-- ADD EVENT -->
+<section class="block">
+  <div class="block-head">
+    <p class="section-label">Agenda</p>
+    <div class="cal-head-actions">
+      {% if show_passed %}
+        <a class="mini" href="/calendar">Hide past</a>
+      {% else %}
+        <a class="mini" href="/calendar?passed=1">Show past</a>
+      {% endif %}
+      <details class="add-event">
+        <summary class="btn btn-gold">Add event</summary>
+        <form class="add-event-form" method="post" action="/calendar/add">
+          <input name="title" placeholder="Title (e.g. Investor day)" maxlength="120" required>
+          <input name="event_date" type="date" required aria-label="Event date">
+          <input name="ticker" placeholder="Ticker (optional)" maxlength="6" autocomplete="off">
+          <select name="kind" aria-label="Kind">
+            <option value="manual">General</option>
+            <option value="analyst_day">Analyst day</option>
+            <option value="product_launch">Product launch</option>
+            <option value="pdufa">PDUFA / readout (bio)</option>
+          </select>
+          <button class="btn" type="submit">Save</button>
+        </form>
+      </details>
+    </div>
+  </div>
+
+  {% for week in agenda %}
+  <div class="block cal-week">
+    <div class="block-head">
+      <p class="section-label">{{ week.label }}</p>
+      <span class="cal-week-sub muted">{{ week.sub }}</span>
+    </div>
+
+    {% if week.events %}
+    <div class="table-scroll">
+      <table class="grid compact cal-grid">
+        <tbody>
+          {% for e in week.events %}
+          <tr class="{{ 'cal-passed' if e.days_until < 0 else '' }}">
+            <td class="cal-date {{ 'near' if e.near else '' }}">
+              <span class="cal-day">{{ e.date_label }}</span>
+              <span class="cal-rel muted">{{ e.rel }}</span>
+            </td>
+            <td class="cal-what">
+              {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
+              <span class="cal-kind">{{ e.label }}</span>
+            </td>
+            <td class="cal-title">{{ e.title }}</td>
+            <td class="cal-when muted">{{ e.when }}</td>
+            <td class="num cal-chip">
+              {% if e.chip %}<span class="tag {{ e.chip_class }}">{{ e.chip }}</span>{% endif %}
+            </td>
+            <td class="row-actions cal-actions">
+              {% if e.editable %}
+              <details class="cal-edit">
+                <summary class="mini">edit</summary>
+                <form class="cal-edit-form" method="post" action="/calendar/{{ e.id }}/edit">
+                  <input name="title" value="{{ e.title }}" maxlength="120" required>
+                  <input name="event_date" type="date" value="{{ e.event_date }}" required>
+                  <button class="mini" type="submit">Save</button>
+                </form>
+                <form method="post" action="/calendar/{{ e.id }}/delete">
+                  <button class="mini danger" data-confirm="Delete “{{ e.title }}”?">Delete</button>
+                </form>
+              </details>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if week.tier_b %}
+    <details class="jobs more-macro">
+      <summary>More macro ({{ week.tier_b | length }})</summary>
+      <table class="grid compact cal-grid">
+        <tbody>
+          {% for e in week.tier_b %}
+          <tr class="{{ 'cal-passed' if e.days_until < 0 else '' }}">
+            <td class="cal-date"><span class="cal-day">{{ e.date_label }}</span></td>
+            <td class="cal-what"><span class="tag macro">macro</span><span class="cal-kind">{{ e.label }}</span></td>
+            <td class="cal-title">{{ e.title }}</td>
+            <td class="cal-when muted">{{ e.when }}</td>
+            <td></td><td></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="empty">No upcoming events yet — run the calendar collector, or add one by hand above.</p>
+  {% endfor %}
+</section>
+
+{% endblock %}

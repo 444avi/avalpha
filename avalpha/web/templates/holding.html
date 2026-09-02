@@ -53,6 +53,43 @@
 </section>
 
 <section class="block">
+  <div class="block-head">
+    <p class="section-label">Upcoming catalysts · {{ h.ticker }}</p>
+    {% if is_bio %}
+    <details class="add-event">
+      <summary class="mini">+ PDUFA / readout</summary>
+      <form class="add-event-form" method="post" action="/calendar/add">
+        <input type="hidden" name="kind" value="pdufa">
+        <input type="hidden" name="ticker" value="{{ h.ticker }}">
+        <input name="title" placeholder="e.g. PDUFA — drug X" maxlength="120" required>
+        <input name="event_date" type="date" required aria-label="Date">
+        <button class="btn small" type="submit">Add</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+  {% if events %}
+  <div class="table-scroll">
+    <table class="grid compact cal-grid">
+      <tbody>
+        {% for e in events %}
+        <tr>
+          <td class="cal-date {{ 'near' if e.near else '' }}"><span class="cal-day">{{ e.date_label }}</span><span class="cal-rel muted">{{ e.rel }}</span></td>
+          <td class="cal-what"><span class="cal-kind">{{ e.label }}</span></td>
+          <td class="cal-title">{{ e.title }}</td>
+          <td class="cal-when muted">{{ e.when }}</td>
+          <td class="num cal-chip">{% if e.chip %}<span class="tag {{ e.chip_class }}">{{ e.chip }}</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty">No scheduled catalysts. <a class="tkr" href="/calendar">Add one →</a></p>
+  {% endif %}
+</section>
+
+<section class="block">
   <div class="block-head"><p class="section-label">Signals · {{ h.ticker }}</p></div>
   {% set scores = d.scores %}
   {% include "_signals.html" with context %}

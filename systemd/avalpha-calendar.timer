@@ -1,0 +1,12 @@
+[Unit]
+Description=avalpha calendar collector timer
+
+[Timer]
+# Daily. Earnings dates drift slowly and macro release schedules change rarely,
+# so one refresh a day is plenty; the internal due-check (43200s) also guards it.
+OnBootSec=600
+OnUnitActiveSec=86400
+AccuracySec=3600
+
+[Install]
+WantedBy=timers.target

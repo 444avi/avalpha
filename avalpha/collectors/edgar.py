@@ -12,6 +12,7 @@ import feedparser
 import requests
 
 from avalpha import watchlist
+from avalpha.calendar_store import confirm_earnings
 from avalpha.collectors.base import insert_item, text_from_html
 from avalpha.config import Config
 
@@ -30,6 +31,20 @@ def _session(config: Config) -> requests.Session:
     s = requests.Session()
     s.headers["User-Agent"] = config.edgar_user_agent
     return s
+
+
+def _filed_at_utc(entry) -> str | None:
+    """The Atom entry's timestamp as a UTC "…Z" instant, or None. feedparser's
+    *_parsed struct is already UTC, so this avoids the tz-offset string the raw
+    `updated` field carries (which would break UTC string comparisons)."""
+    import calendar as _calendar
+    from datetime import datetime, timezone
+
+    parsed = entry.get("updated_parsed") or entry.get("published_parsed")
+    if not parsed:
+        return None
+    ts = _calendar.timegm(parsed)
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _filing_details(
@@ -115,5 +130,20 @@ def collect(config: Config, conn: sqlite3.Connection) -> tuple[int, int]:
         )
         if was_new:
             new += 1
+
+        # Phase 2 (docs/calendar.md §6.2): an 8-K item 2.02 (Results of
+        # Operations) is the company confirming its earnings — upgrade the
+        # matching scheduled calendar row to 'confirmed'. Reuses an item the
+        # pipeline already collects; no new feed.
+        form = m.group("form").strip()
+        if form.startswith("8-K") and "2.02" in (items_codes or ""):
+            holding = ciks.get(int(cik10))
+            if holding is not None:
+                confirm_earnings(
+                    conn,
+                    holding.ticker,
+                    event_at=_filed_at_utc(entry),
+                    source_ref=accession,
+                )
     conn.commit()
     return fetched, new

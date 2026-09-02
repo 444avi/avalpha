@@ -1,4 +1,4 @@
--- avalpha schema v1. Applied via PRAGMA user_version migrations in db.py.
+-- avalpha schema v3. Applied via PRAGMA user_version migrations in db.py.
 -- All timestamps are UTC ISO-8601 strings ("YYYY-MM-DDTHH:MM:SSZ").
 
 CREATE TABLE watchlist (
@@ -14,6 +14,7 @@ CREATE TABLE watchlist (
     shares_outstanding    INTEGER,
     enrichment_confidence TEXT CHECK (enrichment_confidence IN ('high', 'medium', 'low')),
     enriched_at           TEXT,
+    industry              TEXT,               -- profile2.finnhubIndustry; gates bio (PDUFA) events
     active                INTEGER NOT NULL DEFAULT 1,
     added_at              TEXT NOT NULL,
     deactivated_at        TEXT
@@ -116,3 +117,36 @@ CREATE TABLE IF NOT EXISTS web_jobs (
     output       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_web_jobs_started ON web_jobs (started_at);
+
+-- Upcoming catalyst dates for holdings and the broad market. A scheduling
+-- layer, not a collector: one small structured fact per event (the "when"),
+-- never the content. All writes are upserts on dedup_key (see calendar_store).
+CREATE TABLE calendar_events (
+    id            INTEGER PRIMARY KEY,
+    ticker        TEXT,               -- NULL = macro / market-wide. Not FK-constrained
+                                      -- (macro rows are tickerless; keep events for
+                                      -- deactivated holdings).
+    kind          TEXT NOT NULL,      -- earnings | ipo_lockup | analyst_day | pdufa |
+                                      -- product_launch | fomc | cpi | pce | jobs | ppi |
+                                      -- gdp | fomc_minutes | retail_sales | ism |
+                                      -- sentiment | beige_book | fed_speak |
+                                      -- jobless_claims | manual
+    title         TEXT NOT NULL,
+    event_date    TEXT NOT NULL,      -- YYYY-MM-DD, local calendar date (the "when")
+    event_at      TEXT,               -- UTC ISO instant, only for timed events
+    tz            TEXT,               -- e.g. America/New_York (macro releases are ET)
+    is_timed      INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'scheduled'
+                    CHECK (status IN ('scheduled','confirmed','tentative','passed','cancelled')),
+    source        TEXT NOT NULL,      -- finnhub | edgar | ir | curated | manual | computed
+                                      --   | fred | fed | derived
+    source_ref    TEXT,              -- accession no. / url / endpoint
+    confidence    TEXT CHECK (confidence IN ('high','medium','low')),
+    fiscal_period TEXT,              -- e.g. 2026Q4, for earnings dedup
+    dedup_key     TEXT NOT NULL UNIQUE,
+    meta_json     TEXT NOT NULL DEFAULT '{}',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX idx_calendar_date   ON calendar_events (event_date);
+CREATE INDEX idx_calendar_ticker ON calendar_events (ticker, event_date);

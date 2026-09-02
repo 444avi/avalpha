@@ -41,6 +41,10 @@ class Config:
         return _require_env("FINNHUB_API_KEY")
 
     @property
+    def fred_api_key(self) -> str:
+        return _require_env("FRED_API_KEY")
+
+    @property
     def contact_email(self) -> str:
         return _require_env("AVALPHA_CONTACT_EMAIL")
 

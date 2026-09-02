@@ -204,6 +204,60 @@ code { font-family: "SFMono-Regular", ui-monospace, Menlo, monospace; font-size:
 .denied h1 { font-family: var(--display); font-size: 42px; margin: 8px 0 16px; }
 .denied-reason { color: var(--faint); font-size: 12px; margin-top: 24px; font-family: ui-monospace, monospace; }
 
+/* ---- calendar ---- */
+.tag.macro { color: var(--muted); border-color: var(--line-2); }
+.tag.chip-ok { color: var(--pos); border-color: rgba(87,179,137,0.4); }
+.tag.chip-muted { color: var(--faint); }
+
+/* upcoming strip on the dashboard */
+.upcoming-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.up-item { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; position: relative; }
+.up-item.up-near { border-color: var(--gold-line); background: linear-gradient(180deg, var(--gold-soft), var(--panel)); }
+.up-when { display: flex; align-items: baseline; gap: 8px; }
+.up-rel { font-size: 12px; }
+.up-label { font-size: 13px; color: var(--text); }
+.up-item .tag { position: absolute; top: 12px; right: 12px; }
+
+/* per-row badge on the portfolio table */
+.cal-badge { display: inline-block; margin-left: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.cal-badge:hover { color: var(--text); border-color: var(--gold-line); }
+.cal-badge.near { color: var(--gold); border-color: var(--gold-line); background: var(--gold-soft); }
+
+/* agenda */
+.cal-week { margin-bottom: 30px; }
+.cal-week-sub { font-size: 12px; }
+.cal-head-actions { display: flex; align-items: center; gap: 12px; }
+.cal-grid td { vertical-align: middle; }
+.cal-date { white-space: nowrap; }
+.cal-date .cal-day { font-family: var(--display); font-weight: 500; color: var(--text); }
+.cal-date .cal-rel { display: block; font-size: 11px; }
+.cal-date.near .cal-day { color: var(--gold); }
+.cal-kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--gold); margin-left: 8px; }
+.cal-what { white-space: nowrap; }
+.cal-title { color: var(--muted); }
+.cal-when { font-size: 12px; white-space: nowrap; }
+.cal-chip { white-space: nowrap; }
+tr.cal-passed { opacity: 0.45; }
+.more-macro { margin: 8px 0 0; }
+.more-macro summary { font-size: 12px; }
+
+/* add / edit event disclosures */
+.add-event { position: relative; }
+.add-event > summary { list-style: none; display: inline-flex; }
+.add-event > summary::-webkit-details-marker { display: none; }
+.add-event-form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+.add-event-form input, .add-event-form select, .cal-edit-form input {
+  background: var(--panel); border: 1px solid var(--line-2); color: var(--text);
+  border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 13px;
+}
+.add-event-form input:focus, .add-event-form select:focus, .cal-edit-form input:focus { outline: none; border-color: var(--gold-line); }
+.cal-actions { text-align: right; }
+.cal-edit { display: inline-block; }
+.cal-edit > summary { list-style: none; cursor: pointer; }
+.cal-edit > summary::-webkit-details-marker { display: none; }
+.cal-edit-form { display: inline-flex; gap: 6px; margin-top: 6px; }
+.cal-edit form { display: inline-flex; margin-top: 6px; }
+
 @media (max-width: 720px) {
   .nav { padding: 14px 18px; gap: 14px; flex-wrap: wrap; }
   .member { display: none; }

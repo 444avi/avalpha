@@ -30,6 +30,7 @@ strips the path prefix, so `/avalpha/env/ANTHROPIC_API_KEY` becomes
 for kv in \
   "ANTHROPIC_API_KEY=sk-ant-..." \
   "FINNHUB_API_KEY=..." \
+  "FRED_API_KEY=..." \
   "GMAIL_APP_PASSWORD=..." \
   "REDDIT_CLIENT_ID=..." \
   "REDDIT_CLIENT_SECRET=..." \

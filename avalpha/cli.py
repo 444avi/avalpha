@@ -73,6 +73,7 @@ def add(ticker: str, weight: float, add_anyway: bool):
         weight=weight,
         shares_outstanding=result.shares_outstanding,
         enrichment_confidence=result.confidence,
+        industry=result.industry,
     )
     click.echo(f"\nAdded {ticker} (weight {weight}%).")
     if result.ir_feed_status == "none":
@@ -110,7 +111,8 @@ def list_():
 
 @main.command(name="run-collector")
 @click.argument(
-    "source", type=click.Choice(["edgar", "ir", "gnews", "reddit", "prices"])
+    "source",
+    type=click.Choice(["edgar", "ir", "gnews", "reddit", "prices", "calendar"]),
 )
 @click.option("--force", is_flag=True, help="Ignore the cadence due-check.")
 def run_collector(source: str, force: bool):

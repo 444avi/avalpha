@@ -16,6 +16,28 @@
   </div>
 </section>
 
+<!-- UPCOMING (next 7 days) -->
+{% if upcoming %}
+<section class="block">
+  <div class="block-head">
+    <p class="section-label">Upcoming · next 7 days</p>
+    <a class="mini" href="/calendar">Full calendar →</a>
+  </div>
+  <div class="upcoming-strip">
+    {% for e in upcoming %}
+    <div class="up-item {{ 'up-near' if e.near else '' }}">
+      <div class="up-when">
+        {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
+        <span class="up-rel muted">{{ e.rel }}</span>
+      </div>
+      <div class="up-label">{{ e.label }}{% if e.when %} <span class="muted">· {{ e.when }}</span>{% endif %}</div>
+      {% if e.chip %}<span class="tag {{ e.chip_class }}">{{ e.chip }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <!-- PORTFOLIO -->
 <section class="block">
   <div class="block-head">
@@ -33,7 +55,11 @@
     <tbody>
       {% for h in holdings %}
       <tr class="{{ '' if h.active else 'inactive' }}">
-        <td><a class="tkr" href="/holding/{{ h.ticker }}">{{ h.ticker }}</a>{% if not h.active %} <span class="tag">inactive</span>{% endif %}</td>
+        <td>
+          <a class="tkr" href="/holding/{{ h.ticker }}">{{ h.ticker }}</a>{% if not h.active %} <span class="tag">inactive</span>{% endif %}
+          {% set b = badges.get(h.ticker) %}
+          {% if b %}<a class="cal-badge {{ 'near' if b.near else '' }}" href="/calendar" title="{{ b.title }}">{{ b.label }} {{ b.rel }}</a>{% endif %}
+        </td>
         <td class="name">{{ h.legal_name }}</td>
         <td class="num">
           <form class="weight-form" method="post" action="/holding/{{ h.ticker }}/weight">

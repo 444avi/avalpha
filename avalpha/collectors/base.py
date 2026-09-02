@@ -11,7 +11,7 @@ from html.parser import HTMLParser
 
 from avalpha.config import Config
 from avalpha.db import utcnow
-from avalpha.market_state import poll_interval
+from avalpha.market_state import earnings_escalated, poll_interval
 
 
 class RunOutcome:
@@ -41,7 +41,10 @@ def _is_due(conn: sqlite3.Connection, source: str, now: datetime) -> bool:
     last = datetime.strptime(row["started_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
         tzinfo=timezone.utc
     )
-    return (now - last).total_seconds() >= poll_interval(source, now)
+    # Near a confirmed earnings / PDUFA date, EDGAR & IR ramp their cadence so a
+    # same-day filing is caught in seconds (docs/calendar.md §6.3).
+    escalated = source in ("edgar", "ir") and earnings_escalated(conn, now)
+    return (now - last).total_seconds() >= poll_interval(source, now, escalated=escalated)
 
 
 def run(config: Config, conn: sqlite3.Connection, source: str, collect, force: bool = False) -> RunOutcome:

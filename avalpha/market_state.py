@@ -6,7 +6,7 @@ States:
   closed       everything else: nights, weekends, market holidays
 """
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
@@ -51,6 +51,7 @@ INTERVALS: dict[str, dict[str, int]] = {
     "gnews":  {"regular": 600, "after_hours": 600, "closed": 1800},
     "reddit": {"regular": 900, "after_hours": 900, "closed": 3600},
     "prices": {"regular": 21600, "after_hours": 21600, "closed": 21600},
+    "calendar": {"regular": 43200, "after_hours": 43200, "closed": 43200},
 }
 
 
@@ -84,9 +85,45 @@ def poll_interval(source: str, now_utc: datetime, escalated: bool = False) -> in
     return INTERVALS[source][market_state(now_utc)]
 
 
-def earnings_escalated(ticker: str, now_utc: datetime) -> bool:
-    """Phase 2 stub: no earnings-calendar source in Phase 1."""
-    return False
+def earnings_escalated(conn, now_utc: datetime) -> bool:
+    """True when any active holding has a near-term binary catalyst.
+
+    Escalation is *global*, not per-ticker, because the collectors poll globally
+    (docs/calendar.md §6.3): if any active holding has a **confirmed** earnings
+    report — or any PDUFA/readout — landing within the next 48h, EDGAR/IR ramp
+    their polling. Confirmed-only for earnings so an unverified Finnhub estimate
+    that later slips doesn't churn the whole pipeline; PDUFA dates are curated so
+    any non-terminal status counts.
+    """
+    from datetime import timedelta
+
+    now = now_utc.astimezone(timezone.utc)
+    horizon = now + timedelta(hours=48)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    horizon_iso = horizon.strftime("%Y-%m-%dT%H:%M:%SZ")
+    today_iso = now.date().isoformat()
+    horizon_date = horizon.date().isoformat()
+
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM calendar_events c
+        JOIN watchlist w ON w.ticker = c.ticker AND w.active = 1
+        WHERE c.status NOT IN ('passed', 'cancelled')
+          AND (
+                (c.kind = 'earnings' AND c.status = 'confirmed')
+                OR c.kind = 'pdufa'
+              )
+          AND (
+                (c.is_timed = 1 AND c.event_at IS NOT NULL
+                    AND c.event_at BETWEEN ? AND ?)
+                OR (c.event_at IS NULL AND c.event_date BETWEEN ? AND ?)
+              )
+        LIMIT 1
+        """,
+        (now_iso, horizon_iso, today_iso, horizon_date),
+    ).fetchone()
+    return row is not None
 
 
 def prior_trading_day(d: date) -> date:

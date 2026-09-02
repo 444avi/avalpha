@@ -20,7 +20,11 @@ def test_schema_applies_and_wal(tmp_path):
         "prices",
         "collector_runs",
         "digests",
+        "calendar_events",
     } <= tables
+    # schema v3 added the bio-gate column
+    wl_cols = {r[1] for r in conn.execute("PRAGMA table_info(watchlist)")}
+    assert "industry" in wl_cols
 
 
 def test_reconnect_is_idempotent(tmp_path):

@@ -64,6 +64,7 @@ sudo mkdir -p /etc/avalpha
 sudo tee /etc/avalpha/env > /dev/null <<'EOF'
 ANTHROPIC_API_KEY=sk-ant-...
 FINNHUB_API_KEY=...
+FRED_API_KEY=...
 GMAIL_APP_PASSWORD=...
 REDDIT_CLIENT_ID=...
 REDDIT_CLIENT_SECRET=...
@@ -77,7 +78,11 @@ If your cloud offers a secrets manager, prefer templating this file from it (or
 injecting the vars another way) over storing long-lived keys on disk.
 
 - **Finnhub**: free-tier key from https://finnhub.io — the prices collector uses
-  the `/quote` endpoint (60 calls/min free tier).
+  the `/quote` endpoint, the calendar collector `/calendar/earnings` and
+  `/stock/profile2` (60 calls/min free tier).
+- **FRED**: free, instant key from https://fredaccount.stlouisfed.org/apikeys —
+  the calendar collector pulls forward, reschedule-aware macro release dates from
+  the FRED API (CPI, PPI, jobs, GDP, PCE, retail).
 - **Reddit**: a "script" app at https://www.reddit.com/prefs/apps (OAuth).
 - **Gmail**: enable 2FA on the account, then generate an app password at
   https://myaccount.google.com/apppasswords. The sending address is
@@ -102,8 +107,8 @@ sudo cp systemd/*.service systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now \
   avalpha-edgar.timer avalpha-ir.timer avalpha-gnews.timer \
-  avalpha-reddit.timer avalpha-prices.timer avalpha-matcher.timer \
-  avalpha-scorer.service avalpha-digest.timer
+  avalpha-reddit.timer avalpha-prices.timer avalpha-calendar.timer \
+  avalpha-matcher.timer avalpha-scorer.service avalpha-digest.timer
 ```
 
 Timers fire at each source's *fastest* cadence; the market-state due-check in

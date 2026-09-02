@@ -21,9 +21,11 @@ class Holding:
     shares_outstanding: int | None
     enrichment_confidence: str | None
     active: bool
+    industry: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Holding":
+        keys = row.keys()
         return cls(
             ticker=row["ticker"],
             cik=row["cik"],
@@ -37,6 +39,7 @@ class Holding:
             shares_outstanding=row["shares_outstanding"],
             enrichment_confidence=row["enrichment_confidence"],
             active=bool(row["active"]),
+            industry=row["industry"] if "industry" in keys else None,
         )
 
 
@@ -71,14 +74,15 @@ def upsert(
     weight: float,
     shares_outstanding: int | None,
     enrichment_confidence: str,
+    industry: str | None = None,
 ) -> None:
     now = utcnow()
     conn.execute(
         """
         INSERT INTO watchlist (ticker, cik, legal_name, aliases_json, products_json,
             executives_json, ir_feed_url, ir_feed_status, weight, shares_outstanding,
-            enrichment_confidence, enriched_at, active, added_at, deactivated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
+            enrichment_confidence, industry, enriched_at, active, added_at, deactivated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
         ON CONFLICT (ticker) DO UPDATE SET
             cik = excluded.cik,
             legal_name = excluded.legal_name,
@@ -90,6 +94,8 @@ def upsert(
             weight = excluded.weight,
             shares_outstanding = excluded.shares_outstanding,
             enrichment_confidence = excluded.enrichment_confidence,
+            -- keep an existing industry if this enrich pass didn't resolve one
+            industry = COALESCE(excluded.industry, watchlist.industry),
             enriched_at = excluded.enriched_at,
             active = 1,
             deactivated_at = NULL
@@ -106,11 +112,23 @@ def upsert(
             weight,
             shares_outstanding,
             enrichment_confidence,
+            industry,
             now,
             now,
         ),
     )
     conn.commit()
+
+
+def set_industry(conn: sqlite3.Connection, ticker: str, industry: str | None) -> bool:
+    """Persist profile2.finnhubIndustry (calendar collector / enrich). Bio gate."""
+    if not industry:
+        return False
+    cur = conn.execute(
+        "UPDATE watchlist SET industry = ? WHERE ticker = ?", (industry, ticker)
+    )
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def deactivate(conn: sqlite3.Connection, ticker: str) -> bool:

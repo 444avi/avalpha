@@ -29,6 +29,12 @@
   .mat.high { background: #fde3e3; color: #b02020; }
   .unusual { background: #f7f6f2; padding: 8pt 10pt; border-radius: 4pt; }
   .unusual p { margin: 2pt 0; }
+  ul.cats { padding-left: 0; list-style: none; margin: 4pt 0; }
+  ul.cats li { margin-bottom: 4pt; line-height: 1.35; }
+  .cat-date { display: inline-block; min-width: 58pt; color: #666; font-size: 9pt; }
+  .cat-macro { color: #666; font-weight: bold; }
+  .cat-when { color: #888; }
+  .cat-confirmed { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 4pt; border-radius: 3pt; background: #e3f2e6; color: #0a7a33; }
 </style>
 </head>
 <body>
@@ -38,6 +44,21 @@
   <div class="meta">Covering {{ label_date }} &middot; built {{ built_at }} UTC &middot; {{ holdings|length }} holdings</div>
   <h3>Portfolio</h3>
   <div class="narrative">{{ cover_text }}</div>
+
+  {% if catalysts %}
+  <h3>Catalysts — next 7 days</h3>
+  <ul class="cats">
+    {% for c in catalysts %}
+    <li>
+      <span class="cat-date">{{ c.date }}</span>
+      {% if c.ticker %}<b>{{ c.ticker }}</b>{% else %}<span class="cat-macro">Macro</span>{% endif %}
+      {{ c.label }}{% if c.when %} <span class="cat-when">({{ c.when }})</span>{% endif %}
+      {% if c.confirmed %}<span class="cat-confirmed">confirmed</span>{% endif %}
+      <span class="src">{{ c.title }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </div>
 
 {% for h in holdings %}
