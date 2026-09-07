@@ -6,6 +6,7 @@ except /healthz requires a member. Portfolio edits and job triggers redirect
 back with a ``?msg=`` flash so we need no session store.
 """
 
+import hashlib
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -30,6 +31,20 @@ _VALID_JOBS = {"matcher", "scorer", "digest"} | {
 _MANUAL_KINDS = {"manual", "pdufa", "analyst_day", "product_launch"}
 
 
+def _asset_version() -> str:
+    """Short content hash of the static bundle, used to cache-bust the CSS/JS
+    URLs. Changes whenever a static file changes, so a new deploy points the
+    templates at a fresh URL and Cloudflare (which caches by URL) fetches the
+    new copy instead of serving a stale edge-cached one."""
+    h = hashlib.sha256()
+    for name in ("styles.css", "app.js"):
+        try:
+            h.update((_HERE / "static" / name).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:8]
+
+
 def _valid_date(s: str) -> bool:
     try:
         __import__("datetime").date.fromisoformat(s)
@@ -50,6 +65,17 @@ def create_app(config: Config | None = None) -> FastAPI:
     templates.env.filters["pct"] = _pct
     templates.env.filters["shortdt"] = _shortdt
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
+    asset_version = _asset_version()
+
+    # Give static assets a sane cache lifetime. URLs are content-hashed
+    # (?v=asset_version), so a long TTL is safe: changed content means a new
+    # URL, and edge/browser caches never serve a stale version.
+    @app.middleware("http")
+    async def _static_cache_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "public, max-age=86400"
+        return response
 
     # -- request-scoped helpers --------------------------------------------
 
@@ -69,6 +95,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             "request": request,
             "fund_name": config.web_fund_name,
             "member": member_email,
+            "asset_version": asset_version,
             "path": request.url.path,
             "msg": request.query_params.get("msg"),
             "err": request.query_params.get("err"),
@@ -91,7 +118,11 @@ def create_app(config: Config | None = None) -> FastAPI:
             return templates.TemplateResponse(
                 request,
                 "403.html",
-                {"fund_name": config.web_fund_name, "reason": exc.reason},
+                {
+                    "fund_name": config.web_fund_name,
+                    "reason": exc.reason,
+                    "asset_version": asset_version,
+                },
                 status_code=403,
             )
         return JSONResponse({"error": "forbidden", "detail": exc.reason}, status_code=403)
