@@ -46,7 +46,7 @@ Parameters:
     Description: Gmail account that owns GMAIL_APP_PASSWORD; used as From header and SMTP login.
   WebFundName:
     Type: String
-    Default: The Silo Fund
+    Default: Arboretum Investments
     Description: Fund name shown in the web console header.
   AppHostname:
     Type: String
