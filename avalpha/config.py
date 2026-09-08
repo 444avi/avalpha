@@ -25,8 +25,14 @@ class Config:
         return _require_env("ANTHROPIC_API_KEY")
 
     @property
-    def gmail_app_password(self) -> str:
-        return _require_env("GMAIL_APP_PASSWORD")
+    def aws_region(self) -> str:
+        """Region for Amazon SES. Not a secret; defaults to us-west-1."""
+        return os.environ.get("AWS_REGION", "").strip() or "us-west-1"
+
+    @property
+    def ses_configuration_set(self) -> str:
+        """SES configuration set for bounce/complaint tracking. Empty disables."""
+        return os.environ.get("SES_CONFIGURATION_SET", "arboretum-notifications").strip()
 
     @property
     def reddit_client_id(self) -> str:

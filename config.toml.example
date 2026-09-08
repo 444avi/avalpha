@@ -10,10 +10,11 @@ digest_dir = "/opt/avalpha/data/digests"
 
 [email]
 recipient = "you@example.com"
-# Sent via Gmail's SMTP relay: the address here must be the Gmail account that
-# owns GMAIL_APP_PASSWORD (a display name is fine). It's used both as the From
-# header and the SMTP login.
-sender = "avalpha <notifications@example.com>"
+# Sent via Amazon SES, authenticated by the EC2 instance role (no password).
+# The address here is the From header and must be on a verified SES identity —
+# the arboretuminvestments.net domain (a display name is fine). Region comes
+# from AWS_REGION and defaults to us-west-1.
+sender = "avalpha <alerts@arboretuminvestments.net>"
 
 [reddit]
 subreddits = ["stocks", "investing", "wallstreetbets", "StockMarket", "options"]
@@ -30,7 +31,10 @@ narrative = "claude-sonnet-4-6"
 #     local .env next to this file for development) ---
 # ANTHROPIC_API_KEY      required
 # FINNHUB_API_KEY        required for the prices collector
-# GMAIL_APP_PASSWORD     required for sending (test-digest works without it)
+# AWS_REGION             optional — Amazon SES region for sending (default us-west-1);
+#                        auth is the EC2 instance role, so no mail password is needed
+# SES_CONFIGURATION_SET  optional — SES config set for bounce/complaint tracking
+#                        via SNS (default arboretum-notifications; empty disables)
 # REDDIT_CLIENT_ID       required for the reddit collector
 # REDDIT_CLIENT_SECRET   required for the reddit collector
 # AVALPHA_CONTACT_EMAIL  required — goes in the SEC EDGAR User-Agent header
