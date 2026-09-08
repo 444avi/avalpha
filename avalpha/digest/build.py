@@ -41,6 +41,21 @@ by the items below. No preamble, no bullet points.
 {sections}
 """
 
+MACRO_ANALYSIS_PROMPT = """\
+You write the "What happened" macro section of a morning portfolio digest,
+covering economic releases since the last digest. Below are the released figures
+(actual vs the prior period). Write 2-4 plain sentences on what the prints say
+about the economy and what they mean for this portfolio — tie to the holdings
+only where there is a real connection, don't force it. No preamble, no bullet
+points, no hedging boilerplate. Report only what the figures support; do not
+invent a consensus or "expected" number unless one is given below.
+
+Holdings: {holdings}
+
+Releases:
+{releases}
+"""
+
 
 def _window(conn: sqlite3.Connection, now: datetime) -> tuple[str, str]:
     row = conn.execute(
@@ -150,6 +165,64 @@ def _catalysts(conn: sqlite3.Connection, now: datetime, days: int = 7) -> list[d
     return out
 
 
+def _macro_events(config: Config, conn: sqlite3.Connection, start: str, end: str) -> list[dict]:
+    """Tier A macro events whose release fell in the digest window, each enriched
+    with the actual figures from FRED (and consensus, if the FMP seam is active).
+    Returns [] if the FRED key is unset — the outcome block is then simply omitted."""
+    from avalpha import calendar_outcomes
+    from avalpha.calendar_store import TIER_A_MACRO
+
+    try:
+        fred_key = config.fred_api_key
+    except RuntimeError:
+        return []  # no key configured → skip the block, still build the digest
+
+    placeholders = ",".join("?" * len(TIER_A_MACRO))
+    rows = conn.execute(
+        f"SELECT * FROM calendar_events WHERE ticker IS NULL AND kind IN ({placeholders}) "
+        "AND status != 'cancelled' AND ("
+        "  (event_at IS NOT NULL AND event_at > ? AND event_at <= ?) OR "
+        "  (event_at IS NULL AND event_date >= ? AND event_date <= ?)) "
+        "ORDER BY event_date, kind",
+        (*TIER_A_MACRO, start, end, start[:10], end[:10]),
+    ).fetchall()
+
+    out = []
+    for r in rows:
+        outcome = calendar_outcomes.macro_outcome(r["kind"], fred_key)
+        if not outcome:
+            continue  # data short or fetch failed — omit rather than show a blank
+        consensus = calendar_outcomes.macro_consensus(r["kind"], r["event_date"], config)
+        cons_str = None
+        if consensus:
+            verdict = "beat" if consensus["beat"] else "miss"
+            cons_str = f"vs est {consensus['estimate']} — {verdict}"
+        out.append({"label": outcome["label"], "lines": outcome["lines"], "consensus": cons_str})
+    return out
+
+
+def _earnings_in_window(config: Config, conn, ticker: str, start: str, end: str) -> dict | None:
+    """EPS beat/miss for a holding whose earnings date fell in the digest window,
+    or None. The scheduled date is on the calendar; the actuals come from Finnhub."""
+    from avalpha import calendar_outcomes
+
+    ev = conn.execute(
+        "SELECT fiscal_period FROM calendar_events WHERE ticker = ? AND kind = 'earnings' "
+        "AND status != 'cancelled' AND ("
+        "  (event_at IS NOT NULL AND event_at > ? AND event_at <= ?) OR "
+        "  (event_at IS NULL AND event_date >= ? AND event_date <= ?)) "
+        "ORDER BY event_date DESC LIMIT 1",
+        (ticker, start, end, start[:10], end[:10]),
+    ).fetchone()
+    if ev is None:
+        return None
+    try:
+        finnhub_key = config.finnhub_api_key
+    except RuntimeError:
+        return None
+    return calendar_outcomes.earnings_outcome(ticker, finnhub_key, ev["fiscal_period"])
+
+
 def _reddit_stats(conn, ticker: str, start: str, end: str) -> tuple[int, float]:
     window = conn.execute(
         "SELECT COALESCE(SUM(count), 0) FROM reddit_mentions "
@@ -191,6 +264,7 @@ def build_digest(
         close, pct = _price_action(conn, h.ticker, label_date)
         items = _scored_items(conn, h.ticker, start, end)
         insiders = _insider_filings(conn, h.cik, start, end)
+        earnings = _earnings_in_window(config, conn, h.ticker, start, end)
         reddit_count, reddit_baseline = _reddit_stats(conn, h.ticker, start, end)
 
         narrative = ""
@@ -220,6 +294,7 @@ def build_digest(
                 "direction": direction,
                 "narrative": narrative,
                 "bullets": items,
+                "earnings": earnings,
                 "insider_filings": insiders,
                 "reddit_count": reddit_count,
                 "reddit_baseline": reddit_baseline,
@@ -236,6 +311,22 @@ def build_digest(
     else:
         cover_text = "Quiet day across the portfolio — nothing material at any holding."
 
+    macro_events = _macro_events(config, conn, start, end)
+    macro_analysis = ""
+    if macro_events:
+        releases = "\n".join(
+            f"- {m['label']}: {'; '.join(m['lines'])}"
+            + (f" [consensus: {m['consensus']}]" if m["consensus"] else "")
+            for m in macro_events
+        )
+        holdings_str = (
+            ", ".join(f"{d['ticker']} ({d['name']})" for d in holdings_data) or "none active"
+        )
+        macro_analysis = _llm_text(
+            config,
+            MACRO_ANALYSIS_PROMPT.format(holdings=holdings_str, releases=releases),
+        )
+
     env = Environment(
         loader=FileSystemLoader(Path(__file__).resolve().parent), autoescape=True
     )
@@ -244,6 +335,8 @@ def build_digest(
         built_at=end[:16].replace("T", " "),
         holdings=holdings_data,
         cover_text=cover_text,
+        macro_events=macro_events,
+        macro_analysis=macro_analysis,
         catalysts=_catalysts(conn, now),
     )
 

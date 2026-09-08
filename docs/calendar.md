@@ -451,3 +451,36 @@ Settled 2026-09-01:
 - Remaining build-time judgment calls: exact placement of the `escalated`
   computation in the run path; refresh cadence for the calendar timer; test
   coverage. All follow existing repo conventions.
+
+## 12. Post-event outcomes in the digest (added 2026-09-08)
+
+The digest now analyzes events *after* they fire, not just anticipates them: a
+"What happened — macro" cover block reports the released figures for any Tier A
+macro event that fell in the digest window, plus an EPS beat/miss line on the
+page of any holding that reported. This deliberately extends past §1's "knowing
+*what happened* is the existing pipeline's job" — but **only for macro**, which
+has no pipeline (macro is tickerless, never matched or scored). Earnings prose
+still comes from the per-holding narrative; the new line only adds the quant
+beat/miss.
+
+Key design choice: outcomes are computed **at digest-build time, not persisted**
+to `calendar_events` (`avalpha/calendar_outcomes.py`, read by
+`digest/build.py`). The calendar keeps its "when only" charter — no schema,
+collector, or migration change — and the digest owns "what happened" alongside
+"what mattered". Every fetch is best-effort: a failure omits the line, the
+digest still builds.
+
+Sources (all verified against the live key):
+
+- **Macro actuals** — FRED observations. Fed funds target (`DFEDTARU`/`L`, the
+  step tells cut/hold/hike + bps), CPI/PCE headline+core & PPI (YoY/MoM from the
+  index), jobs (`PAYEMS` monthly delta + `UNRATE`), GDP (annualized %). Actual +
+  prior only.
+- **Earnings beat/miss** — Finnhub `/stock/earnings` (free), matched to the
+  passed event's `fiscal_period`; the estimate is also already in event meta.
+- **Macro consensus (beat/miss vs expected)** — *not shipped.* No
+  production-grade free source: `/calendar/economic` is 403 (§2), Trading
+  Economics guest was discontinued (HTTP 410, confirmed 2026-09-08), FMP's
+  economic calendar needs a paid key. `macro_consensus()` + `FMP_API_KEY` are
+  the drop-in seam (unit-tested via `consensus_from_rows`), inert until a working
+  key exists.

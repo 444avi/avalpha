@@ -35,6 +35,15 @@
   .cat-macro { color: #666; font-weight: bold; }
   .cat-when { color: #888; }
   .cat-confirmed { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 4pt; border-radius: 3pt; background: #e3f2e6; color: #0a7a33; }
+  ul.macro { padding-left: 0; list-style: none; margin: 4pt 0; }
+  ul.macro li { margin-bottom: 4pt; line-height: 1.35; }
+  .macro-label { display: inline-block; min-width: 58pt; font-weight: bold; }
+  .macro-fig { color: #1a1a1a; }
+  .macro-cons { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 4pt; border-radius: 3pt; background: #eef1f7; color: #33507a; }
+  .earnings { margin: 8pt 0; }
+  .beat-badge { display: inline-block; font-size: 8pt; font-weight: bold; padding: 0 4pt; border-radius: 3pt; }
+  .beat-badge.beat { background: #e3f2e6; color: #0a7a33; }
+  .beat-badge.miss { background: #fde3e3; color: #b02020; }
 </style>
 </head>
 <body>
@@ -44,6 +53,20 @@
   <div class="meta">Covering {{ label_date }} &middot; built {{ built_at }} UTC &middot; {{ holdings|length }} holdings</div>
   <h3>Portfolio</h3>
   <div class="narrative">{{ cover_text }}</div>
+
+  {% if macro_events %}
+  <h3>What happened — macro since last digest</h3>
+  {% if macro_analysis %}<div class="narrative">{{ macro_analysis }}</div>{% endif %}
+  <ul class="macro">
+    {% for m in macro_events %}
+    <li>
+      <span class="macro-label">{{ m.label }}</span>
+      <span class="macro-fig">{{ m.lines | join('; ') }}</span>
+      {% if m.consensus %}<span class="macro-cons">{{ m.consensus }}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 
   {% if catalysts %}
   <h3>Catalysts — next 7 days</h3>
@@ -74,6 +97,14 @@
       <div class="price flat">no price data</div>
     {% endif %}
   </div>
+
+  {% if h.earnings %}
+  <div class="earnings">
+    <b>Earnings{% if h.earnings.period %} ({{ h.earnings.period }}){% endif %}:</b>
+    EPS {{ "%.2f"|format(h.earnings.eps_actual) }} vs {{ "%.2f"|format(h.earnings.eps_estimate) }} est
+    <span class="beat-badge {{ 'beat' if h.earnings.beat else 'miss' }}">{{ 'beat' if h.earnings.beat else 'miss' }}{% if h.earnings.surprise_pct is not none %} {{ "%+.1f"|format(h.earnings.surprise_pct) }}%{% endif %}</span>
+  </div>
+  {% endif %}
 
   {% if h.narrative %}
     <div class="narrative">{{ h.narrative }}</div>

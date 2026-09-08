@@ -45,6 +45,13 @@ class Config:
         return _require_env("FRED_API_KEY")
 
     @property
+    def fmp_api_key(self) -> str | None:
+        """Optional. Enables the macro-consensus seam (calendar_outcomes.
+        macro_consensus); unset in production today — no free FMP econ-calendar
+        tier — so consensus stays inert."""
+        return os.environ.get("FMP_API_KEY", "").strip() or None
+
+    @property
     def contact_email(self) -> str:
         return _require_env("AVALPHA_CONTACT_EMAIL")
 

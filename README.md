@@ -16,7 +16,12 @@ sources → collectors → item store → matcher → scorer → morning PDF
   pass + Haiku confirm pass for everything else. Never matches ticker symbols.
 - **Scorer**: Sonnet, structured JSON verdicts with a required `mechanism`
   field. Append-only per prompt version — `avalpha replay` re-scores history.
-- **Digest**: 6am PT, WeasyPrint PDF via Gmail SMTP. Quiet days say so explicitly.
+- **Digest**: 6am PT, WeasyPrint PDF via Gmail SMTP. One page per holding, plus
+  a cover with portfolio themes, a 7-day catalyst calendar, and a post-event
+  "what happened" macro block — released figures for any Fed/CPI/PCE/jobs/PPI/GDP
+  event in the window (actuals from FRED) with model analysis, and a per-holding
+  earnings beat/miss (EPS vs estimate). Quiet days say so explicitly. Outcomes
+  are computed at build time, not stored — see [docs/calendar.md](docs/calendar.md) §12.
 
 ## Quick start (dev)
 
