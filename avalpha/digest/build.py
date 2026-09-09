@@ -57,9 +57,17 @@ Releases:
 """
 
 
-def _window(conn: sqlite3.Connection, now: datetime) -> tuple[str, str]:
+def _window(
+    conn: sqlite3.Connection, now: datetime, portfolio_id: int | None = None
+) -> tuple[str, str]:
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     row = conn.execute(
-        "SELECT built_at FROM digests ORDER BY built_at DESC LIMIT 1"
+        "SELECT built_at FROM digests WHERE portfolio_id = ? "
+        "ORDER BY built_at DESC LIMIT 1",
+        (portfolio_id,),
     ).fetchone()
     if row:
         start = row["built_at"]
@@ -127,7 +135,9 @@ def _insider_filings(conn, cik: str, start: str, end: str) -> list[str]:
     return out
 
 
-def _catalysts(conn: sqlite3.Connection, now: datetime, days: int = 7) -> list[dict]:
+def _catalysts(
+    conn: sqlite3.Connection, now: datetime, portfolio_id: int, days: int = 7
+) -> list[dict]:
     """"Catalysts — next `days` days": company events for active holdings + Tier A
     macro only (no Tier B, docs/calendar.md §7). One rolling heads-up block."""
     from datetime import date
@@ -137,13 +147,14 @@ def _catalysts(conn: sqlite3.Connection, now: datetime, days: int = 7) -> list[d
     today = now.date()
     horizon = (today + timedelta(days=days)).isoformat()
     rows = conn.execute(
-        "SELECT c.* FROM calendar_events c "
-        "LEFT JOIN watchlist w ON w.ticker = c.ticker "
-        "WHERE (c.ticker IS NULL OR w.active = 1) "
+        "SELECT c.* FROM calendar_events c WHERE ("
+        "c.portfolio_id = ? OR (c.portfolio_id IS NULL AND ("
+        "c.ticker IS NULL OR EXISTS (SELECT 1 FROM portfolio_holdings ph "
+        "WHERE ph.portfolio_id = ? AND ph.ticker = c.ticker AND ph.active = 1)))) "
         "AND c.status IN ('scheduled','confirmed','tentative') "
         "AND c.event_date >= ? AND c.event_date <= ? "
         "ORDER BY c.event_date, c.is_timed DESC, c.ticker IS NULL, c.ticker",
-        (today.isoformat(), horizon),
+        (portfolio_id, portfolio_id, today.isoformat(), horizon),
     ).fetchall()
     out = []
     for r in rows:
@@ -253,14 +264,21 @@ def _llm_text(config: Config, prompt: str, max_tokens: int = 512) -> str:
 
 
 def build_digest(
-    config: Config, conn: sqlite3.Connection, date_str: str | None = None
+    config: Config,
+    conn: sqlite3.Connection,
+    date_str: str | None = None,
+    portfolio_id: int | None = None,
 ) -> Path:
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     now = datetime.now(timezone.utc)
     label_date = date_str or prior_trading_day(now.astimezone(PACIFIC).date()).isoformat()
-    start, end = _window(conn, now)
+    start, end = _window(conn, now, portfolio_id)
 
     holdings_data = []
-    for h in watchlist.active(conn):
+    for h in watchlist.active(conn, portfolio_id):
         close, pct = _price_action(conn, h.ticker, label_date)
         items = _scored_items(conn, h.ticker, start, end)
         insiders = _insider_filings(conn, h.cik, start, end)
@@ -337,11 +355,12 @@ def build_digest(
         cover_text=cover_text,
         macro_events=macro_events,
         macro_analysis=macro_analysis,
-        catalysts=_catalysts(conn, now),
+        catalysts=_catalysts(conn, now, portfolio_id),
     )
 
-    config.digest_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = config.digest_dir / f"avalpha-{label_date}.pdf"
+    portfolio_dir = config.digest_dir / str(portfolio_id)
+    portfolio_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = portfolio_dir / f"avalpha-{label_date}.pdf"
     # WeasyPrint needs native pango/cairo; import lazily so the rest of the
     # CLI works on a box where those aren't installed.
     from weasyprint import HTML
@@ -349,34 +368,72 @@ def build_digest(
     HTML(string=html).write_pdf(pdf_path)
 
     conn.execute(
-        "INSERT INTO digests (date, built_at, pdf_path) VALUES (?, ?, ?) "
-        "ON CONFLICT (date) DO UPDATE SET built_at = excluded.built_at, "
+        "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT (portfolio_id, date) DO UPDATE SET built_at = excluded.built_at, "
         "pdf_path = excluded.pdf_path",
-        (label_date, utcnow(), str(pdf_path)),
+        (portfolio_id, label_date, utcnow(), str(pdf_path)),
     )
     conn.commit()
     return pdf_path
 
 
 def build_and_send(
-    config: Config, conn: sqlite3.Connection, date_str: str | None = None
+    config: Config,
+    conn: sqlite3.Connection,
+    date_str: str | None = None,
+    portfolio_id: int | None = None,
+) -> None:
+    """Build and send one portfolio, or every portfolio for the timer job."""
+    portfolio_ids = (
+        [portfolio_id]
+        if portfolio_id is not None
+        else [r["id"] for r in conn.execute("SELECT id FROM portfolios ORDER BY id")]
+    )
+    for selected_id in portfolio_ids:
+        _build_and_send_one(config, conn, selected_id, date_str)
+
+
+def _build_and_send_one(
+    config: Config,
+    conn: sqlite3.Connection,
+    portfolio_id: int,
+    date_str: str | None,
 ) -> None:
     from avalpha.mailer import send_digest_email
+    from avalpha.accounts import portfolio_owner_email
 
     now = datetime.now(timezone.utc)
     label_date = date_str or prior_trading_day(now.astimezone(PACIFIC).date()).isoformat()
     already = conn.execute(
-        "SELECT sent_at FROM digests WHERE date = ? AND sent_at IS NOT NULL",
-        (label_date,),
+        "SELECT sent_at FROM digests WHERE portfolio_id = ? AND date = ? "
+        "AND sent_at IS NOT NULL",
+        (portfolio_id, label_date),
     ).fetchone()
     if already:
         print(f"digest for {label_date} already sent at {already['sent_at']}; skipping")
         return
 
-    pdf_path = build_digest(config, conn, date_str=label_date)
-    send_digest_email(config, pdf_path, label_date)
+    recipient = portfolio_owner_email(conn, portfolio_id)
+    if not recipient:
+        raise RuntimeError(f"portfolio {portfolio_id} has no owner")
+    pdf_path = build_digest(
+        config, conn, date_str=label_date, portfolio_id=portfolio_id
+    )
+    send_digest_email(config, pdf_path, label_date, recipient=recipient)
     conn.execute(
-        "UPDATE digests SET sent_at = ? WHERE date = ?", (utcnow(), label_date)
+        "UPDATE digests SET sent_at = ? WHERE portfolio_id = ? AND date = ?",
+        (utcnow(), portfolio_id, label_date),
     )
     conn.commit()
-    print(f"digest for {label_date} sent to {config.email_recipient}")
+    print(f"digest for {label_date} sent to {recipient}")
+
+
+def build_all_digests(
+    config: Config, conn: sqlite3.Connection, date_str: str | None = None
+) -> list[Path]:
+    """Build independent content and PDFs for every provisioned portfolio."""
+    return [
+        build_digest(config, conn, date_str=date_str, portfolio_id=row["id"])
+        for row in conn.execute("SELECT id FROM portfolios ORDER BY id")
+    ]

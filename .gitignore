@@ -5,3 +5,4 @@ dev-data/
 config.toml
 .env
 *.pyc
+.DS_Store

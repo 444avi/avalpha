@@ -84,6 +84,7 @@ class Event:
     event_date: str  # YYYY-MM-DD
     source: str
     dedup_key: str
+    portfolio_id: int | None = None
     ticker: str | None = None
     event_at: str | None = None
     tz: str | None = None
@@ -141,12 +142,13 @@ def upsert_event(conn: sqlite3.Connection, event: Event) -> bool:
         conn.execute(
             """
             INSERT INTO calendar_events (
-                ticker, kind, title, event_date, event_at, tz, is_timed, status,
+                portfolio_id, ticker, kind, title, event_date, event_at, tz, is_timed, status,
                 source, source_ref, confidence, fiscal_period, dedup_key,
                 meta_json, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
+                event.portfolio_id,
                 event.ticker,
                 event.kind,
                 event.title,

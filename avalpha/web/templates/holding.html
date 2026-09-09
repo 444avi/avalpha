@@ -4,7 +4,7 @@
 {% block content %}
 
 <section class="hero hero-holding">
-  <a class="back" href="/">← Portfolio</a>
+  <a class="back" href="/{{ view_suffix }}">← Portfolio</a>
   <p class="eyebrow">{{ 'Active holding' if h.active else 'Inactive holding' }}</p>
   <h1>{{ h.ticker }}</h1>
   <p class="lede">{{ h.legal_name }}</p>
@@ -34,6 +34,9 @@
   </div>
   <div class="col">
     <p class="section-label">Position</p>
+    {% if read_only %}
+    <div class="edit-weight"><label>Target weight (%)</label><strong>{{ '%g' % h.weight }}%</strong></div>
+    {% else %}
     <form class="edit-weight" method="post" action="/holding/{{ h.ticker }}/weight">
       <label>Target weight (%)</label>
       <div class="weight-row">
@@ -41,13 +44,18 @@
         <button class="btn btn-gold" type="submit">Save</button>
       </div>
     </form>
+    {% endif %}
     <div class="pos-actions">
+      {% if not read_only %}
       {% if h.active %}
       <form method="post" action="/holding/{{ h.ticker }}/deactivate"><button class="btn btn-ghost danger" data-confirm="Deactivate {{ h.ticker }}? Historical data is kept.">Deactivate holding</button></form>
       {% else %}
       <form method="post" action="/holding/{{ h.ticker }}/activate"><button class="btn btn-ghost">Reactivate holding</button></form>
       {% endif %}
+      {% endif %}
+      {% if show_ops %}
       <form method="post" action="/jobs/collector:gnews"><button class="btn btn-ghost run" data-confirm="Fetch fresh news across all holdings now?">Refresh news</button></form>
+      {% endif %}
     </div>
   </div>
 </section>
@@ -55,7 +63,7 @@
 <section class="block">
   <div class="block-head">
     <p class="section-label">Upcoming catalysts · {{ h.ticker }}</p>
-    {% if is_bio %}
+    {% if is_bio and not read_only %}
     <details class="add-event">
       <summary class="mini">+ PDUFA / readout</summary>
       <form class="add-event-form" method="post" action="/calendar/add">
@@ -85,7 +93,7 @@
     </table>
   </div>
   {% else %}
-  <p class="empty">No scheduled catalysts. <a class="tkr" href="/calendar">Add one →</a></p>
+  <p class="empty">No scheduled catalysts.{% if not read_only %} <a class="tkr" href="/calendar">Add one →</a>{% endif %}</p>
   {% endif %}
 </section>
 

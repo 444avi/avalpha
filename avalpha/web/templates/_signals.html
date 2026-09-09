@@ -8,7 +8,7 @@
     </div>
     <div class="sig-body">
       <div class="sig-head">
-        <a class="tkr" href="/holding/{{ s.ticker }}">{{ s.ticker }}</a>
+        <a class="tkr" href="/holding/{{ s.ticker }}{{ view_suffix }}">{{ s.ticker }}</a>
         <span class="sig-cat">{{ s.category }}</span>
         <span class="sig-src">{{ s.source }}</span>
         <span class="sig-time muted">{{ s.scored_at | shortdt }}</span>

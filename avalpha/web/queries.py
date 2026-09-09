@@ -49,12 +49,26 @@ def latest_prices(conn: sqlite3.Connection, ticker: str) -> dict:
     return {"close": close, "prev": prev, "date": rows[0]["date"], "change_pct": change}
 
 
-def portfolio(conn: sqlite3.Connection, include_inactive: bool = True) -> list[dict]:
+def portfolio(
+    conn: sqlite3.Connection,
+    portfolio_id: int | None = None,
+    include_inactive: bool = True,
+) -> list[dict]:
     """Holdings with target weight, latest price, day change, market cap, and a
     7-day scored-item count — the dashboard's main table."""
     week_ago = _iso(_utcnow() - timedelta(days=7))
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     rows = conn.execute(
-        "SELECT * FROM watchlist ORDER BY active DESC, weight DESC, ticker"
+        """
+        SELECT w.*, ph.weight, ph.active
+        FROM portfolio_holdings ph JOIN watchlist w ON w.ticker = ph.ticker
+        WHERE ph.portfolio_id = ?
+        ORDER BY ph.active DESC, ph.weight DESC, w.ticker
+        """,
+        (portfolio_id,),
     ).fetchall()
     out = []
     for row in rows:
@@ -91,7 +105,10 @@ def total_weight(holdings: list[dict]) -> float:
 
 
 def recent_scores(
-    conn: sqlite3.Connection, ticker: str | None = None, limit: int = 40
+    conn: sqlite3.Connection,
+    ticker: str | None = None,
+    limit: int = 40,
+    portfolio_id: int | None = None,
 ) -> list[dict]:
     """Latest scored news items (current prompt version), newest first."""
     params: list = [PROMPT_VERSION]
@@ -99,6 +116,12 @@ def recent_scores(
     if ticker:
         where += " AND s.ticker = ?"
         params.append(ticker)
+    if portfolio_id is not None:
+        where += (
+            " AND EXISTS (SELECT 1 FROM portfolio_holdings ph "
+            "WHERE ph.portfolio_id = ? AND ph.ticker = s.ticker AND ph.active = 1)"
+        )
+        params.append(portfolio_id)
     params.append(limit)
     rows = conn.execute(
         f"""
@@ -130,8 +153,21 @@ def recent_scores(
     ]
 
 
-def holding_detail(conn: sqlite3.Connection, ticker: str) -> dict | None:
-    row = conn.execute("SELECT * FROM watchlist WHERE ticker = ?", (ticker,)).fetchone()
+def holding_detail(
+    conn: sqlite3.Connection, ticker: str, portfolio_id: int | None = None
+) -> dict | None:
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
+    row = conn.execute(
+        """
+        SELECT w.*, ph.weight, ph.active
+        FROM portfolio_holdings ph JOIN watchlist w ON w.ticker = ph.ticker
+        WHERE ph.portfolio_id = ? AND ph.ticker = ?
+        """,
+        (portfolio_id, ticker),
+    ).fetchone()
     if not row:
         return None
     h = Holding.from_row(row)
@@ -149,7 +185,7 @@ def holding_detail(conn: sqlite3.Connection, ticker: str) -> dict | None:
             else None
         ),
         "spark": [{"date": r["date"], "close": r["close"]} for r in reversed(spark)],
-        "scores": recent_scores(conn, ticker=ticker, limit=60),
+        "scores": recent_scores(conn, ticker=ticker, limit=60, portfolio_id=portfolio_id),
     }
 
 
@@ -223,10 +259,17 @@ def health(conn: sqlite3.Connection) -> dict:
     }
 
 
-def digests(conn: sqlite3.Connection, limit: int = 60) -> list[dict]:
+def digests(
+    conn: sqlite3.Connection, portfolio_id: int | None = None, limit: int = 60
+) -> list[dict]:
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     rows = conn.execute(
-        "SELECT date, built_at, sent_at, pdf_path FROM digests ORDER BY date DESC LIMIT ?",
-        (limit,),
+        "SELECT date, built_at, sent_at, pdf_path FROM digests "
+        "WHERE portfolio_id = ? ORDER BY date DESC LIMIT ?",
+        (portfolio_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -326,16 +369,18 @@ def _shape_event(row: sqlite3.Row, today: date) -> dict:
 
 
 def _visible_rows(
-    conn: sqlite3.Connection, today: date, include_passed: bool
+    conn: sqlite3.Connection, portfolio_id: int, today: date, include_passed: bool
 ) -> list[sqlite3.Row]:
     """Company events for *active* holdings + all macro. Passed/cancelled hidden
     by default (relevance rules, §7)."""
     sql = (
-        "SELECT c.* FROM calendar_events c "
-        "LEFT JOIN watchlist w ON w.ticker = c.ticker "
-        "WHERE (c.ticker IS NULL OR w.active = 1) "
+        "SELECT c.* FROM calendar_events c WHERE ("
+        "c.portfolio_id = ? OR (c.portfolio_id IS NULL AND ("
+        "c.ticker IS NULL OR EXISTS ("
+        "SELECT 1 FROM portfolio_holdings ph WHERE ph.portfolio_id = ? "
+        "AND ph.ticker = c.ticker AND ph.active = 1)))) "
     )
-    params: list = []
+    params: list = [portfolio_id, portfolio_id]
     if not include_passed:
         sql += (
             "AND c.status IN ('scheduled','confirmed','tentative') "
@@ -347,14 +392,21 @@ def _visible_rows(
 
 
 def calendar_agenda(
-    conn: sqlite3.Connection, include_passed: bool = False, horizon_days: int = 120
+    conn: sqlite3.Connection,
+    portfolio_id: int | None = None,
+    include_passed: bool = False,
+    horizon_days: int = 120,
 ) -> list[dict]:
     """Agenda grouped by week (docs/calendar.md §7). Each group carries `events`
     (company + Tier A macro, shown inline) and `tier_b` (collapsed "More macro")."""
     today = _utcnow().date()
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     horizon = today + timedelta(days=horizon_days)
     groups: dict[str, dict] = {}
-    for row in _visible_rows(conn, today, include_passed):
+    for row in _visible_rows(conn, portfolio_id, today, include_passed):
         ev_date = date.fromisoformat(row["event_date"])
         if not include_passed and ev_date > horizon:
             continue
@@ -387,20 +439,28 @@ def calendar_agenda(
 
 
 def upcoming_events(
-    conn: sqlite3.Connection, days: int = 7, include_tier_b: bool = False
+    conn: sqlite3.Connection,
+    portfolio_id: int | None = None,
+    days: int = 7,
+    include_tier_b: bool = False,
 ) -> list[dict]:
     """Flat next-`days` list for the dashboard strip and the digest. Tier B macro
     excluded unless asked (never in the digest, §7)."""
     today = _utcnow().date()
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     horizon = (today + timedelta(days=days)).isoformat()
     rows = conn.execute(
-        "SELECT c.* FROM calendar_events c "
-        "LEFT JOIN watchlist w ON w.ticker = c.ticker "
-        "WHERE (c.ticker IS NULL OR w.active = 1) "
+        "SELECT c.* FROM calendar_events c WHERE ("
+        "c.portfolio_id = ? OR (c.portfolio_id IS NULL AND ("
+        "c.ticker IS NULL OR EXISTS (SELECT 1 FROM portfolio_holdings ph "
+        "WHERE ph.portfolio_id = ? AND ph.ticker = c.ticker AND ph.active = 1)))) "
         "AND c.status IN ('scheduled','confirmed','tentative') "
         "AND c.event_date >= ? AND c.event_date <= ? "
         "ORDER BY c.event_date, c.is_timed DESC, c.ticker IS NULL, c.ticker",
-        (today.isoformat(), horizon),
+        (portfolio_id, portfolio_id, today.isoformat(), horizon),
     ).fetchall()
     out = [_shape_event(r, today) for r in rows]
     if not include_tier_b:
@@ -408,30 +468,48 @@ def upcoming_events(
     return out
 
 
-def events_for_ticker(conn: sqlite3.Connection, ticker: str, limit: int = 12) -> list[dict]:
+def events_for_ticker(
+    conn: sqlite3.Connection,
+    ticker: str,
+    portfolio_id: int | None = None,
+    limit: int = 12,
+) -> list[dict]:
     """Upcoming events for one holding — the detail page's catalyst list."""
     today = _utcnow().date()
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     rows = conn.execute(
         "SELECT * FROM calendar_events WHERE ticker = ? "
+        "AND (portfolio_id IS NULL OR portfolio_id = ?) "
         "AND status IN ('scheduled','confirmed','tentative') AND event_date >= ? "
         "ORDER BY event_date LIMIT ?",
-        (ticker.upper(), today.isoformat(), limit),
+        (ticker.upper(), portfolio_id, today.isoformat(), limit),
     ).fetchall()
     return [_shape_event(r, today) for r in rows]
 
 
-def ticker_badges(conn: sqlite3.Connection, days: int = 21) -> dict[str, dict]:
+def ticker_badges(
+    conn: sqlite3.Connection, portfolio_id: int | None = None, days: int = 21
+) -> dict[str, dict]:
     """Nearest upcoming company event per active ticker within `days` — the
     dashboard per-row badge ("Earnings in 3d")."""
     today = _utcnow().date()
+    if portfolio_id is None:
+        from avalpha.accounts import default_portfolio_id
+
+        portfolio_id = default_portfolio_id(conn)
     horizon = (today + timedelta(days=days)).isoformat()
     rows = conn.execute(
         "SELECT c.* FROM calendar_events c "
-        "JOIN watchlist w ON w.ticker = c.ticker AND w.active = 1 "
-        "WHERE c.status IN ('scheduled','confirmed','tentative') "
+        "JOIN portfolio_holdings ph ON ph.ticker = c.ticker "
+        "AND ph.portfolio_id = ? AND ph.active = 1 "
+        "WHERE (c.portfolio_id IS NULL OR c.portfolio_id = ?) "
+        "AND c.status IN ('scheduled','confirmed','tentative') "
         "AND c.event_date >= ? AND c.event_date <= ? "
         "ORDER BY c.event_date, c.is_timed DESC",
-        (today.isoformat(), horizon),
+        (portfolio_id, portfolio_id, today.isoformat(), horizon),
     ).fetchall()
     badges: dict[str, dict] = {}
     for r in rows:

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from avalpha import db
+from avalpha import accounts, db, watchlist
 from avalpha.calendar_store import Event, macro_key, upsert_event
 from avalpha.config import Config
 from avalpha.web.app import create_app
@@ -21,15 +21,19 @@ def cfg(tmp_path: Path) -> Config:
 @pytest.fixture
 def seeded(cfg: Config) -> Config:
     conn = db.connect(cfg.db_path)
-    conn.execute(
-        "INSERT INTO watchlist (ticker, cik, legal_name, weight, active, added_at, industry) "
-        "VALUES ('MRNA', '0001682852', 'MODERNA INC', 5, 1, ?, 'Biotechnology')",
-        (db.utcnow(),),
+    user = accounts.resolve_login(conn, "member@thesilofund.com")
+    watchlist.upsert(
+        conn, ticker="MRNA", cik="0001682852", legal_name="MODERNA INC",
+        aliases=[], products=[], executives=[], ir_feed_url=None,
+        ir_feed_status="none", weight=5, shares_outstanding=None,
+        enrichment_confidence="high", industry="Biotechnology",
+        portfolio_id=user.portfolio_id,
     )
-    conn.execute(
-        "INSERT INTO watchlist (ticker, cik, legal_name, weight, active, added_at) "
-        "VALUES ('NVDA', '0001045810', 'NVIDIA CORP', 12, 1, ?)",
-        (db.utcnow(),),
+    watchlist.upsert(
+        conn, ticker="NVDA", cik="0001045810", legal_name="NVIDIA CORP",
+        aliases=[], products=[], executives=[], ir_feed_url=None,
+        ir_feed_status="none", weight=12, shares_outstanding=None,
+        enrichment_confidence="high", portfolio_id=user.portfolio_id,
     )
     soon = (date.today() + timedelta(days=3)).isoformat()
     upsert_event(conn, Event(
@@ -128,7 +132,10 @@ def test_manual_add_validation(seeded, monkeypatch):
 
 
 def test_calendar_collector_is_a_valid_job(seeded, monkeypatch):
-    c = client(seeded, monkeypatch)
+    monkeypatch.setenv("AVALPHA_WEB_DEV_USER", "avi@arboretuminvestments.net")
+    monkeypatch.delenv("CF_ACCESS_TEAM_DOMAIN", raising=False)
+    monkeypatch.delenv("CF_ACCESS_AUD", raising=False)
+    c = TestClient(create_app(seeded), follow_redirects=False)
     # calendar is wired into SOURCES → collector:calendar is a known job and a
     # health tile. (It will fail on missing keys, but must be *accepted*.)
     r = c.post("/jobs/collector:calendar")

@@ -30,9 +30,11 @@ def test_window_uses_last_digest(tmp_path):
     now = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
     start, end = _window(conn, now)
     assert start == "2026-08-02T13:00:00Z"  # first run: trailing 48h
+    portfolio_id = conn.execute("SELECT id FROM portfolios").fetchone()[0]
     conn.execute(
-        "INSERT INTO digests (date, built_at, pdf_path) VALUES "
-        "('2026-08-03', '2026-08-03T13:00:00Z', 'x.pdf')"
+        "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) VALUES "
+        "(?, '2026-08-03', '2026-08-03T13:00:00Z', 'x.pdf')",
+        (portfolio_id,),
     )
     start, end = _window(conn, now)
     assert start == "2026-08-03T13:00:00Z"

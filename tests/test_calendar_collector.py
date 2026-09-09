@@ -15,12 +15,20 @@ def _cfg(tmp_path) -> Config:
 
 
 def _holding(conn, ticker="NVDA", cik="0001045810"):
-    conn.execute(
-        "INSERT INTO watchlist (ticker, cik, legal_name, weight, active, added_at) "
-        "VALUES (?, ?, ?, 1, 1, ?)",
-        (ticker, cik, ticker, db.utcnow()),
+    watchlist.upsert(
+        conn,
+        ticker=ticker,
+        cik=cik,
+        legal_name=ticker,
+        aliases=[],
+        products=[],
+        executives=[],
+        ir_feed_url=None,
+        ir_feed_status="none",
+        weight=1,
+        shares_outstanding=None,
+        enrichment_confidence="high",
     )
-    conn.commit()
     return watchlist.get(conn, ticker)
 
 
@@ -137,7 +145,7 @@ def test_earnings_escalated_only_for_confirmed_near_events(tmp_path):
 def test_escalation_ignores_inactive_holdings(tmp_path):
     conn = db.connect(tmp_path / "t.db")
     _holding(conn, "NVDA")
-    conn.execute("UPDATE watchlist SET active = 0")
+    conn.execute("UPDATE portfolio_holdings SET active = 0")
     now = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
     upsert_event(conn, Event(
         kind="earnings", ticker="NVDA", title="x", event_date="2026-10-29",

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
 
 
@@ -47,6 +47,161 @@ def _migrate_v3(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE watchlist ADD COLUMN industry TEXT")
 
 
+def _migrate_v4(conn: sqlite3.Connection) -> None:
+    """Schema v4: users and strictly scoped, one-owner portfolios."""
+    now = utcnow()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY,
+            email         TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            is_admin      INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL,
+            last_login_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS portfolios (
+            id            INTEGER PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL UNIQUE REFERENCES users (id),
+            name          TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO users (email, is_admin, created_at) VALUES (?, 1, ?)",
+        ("avi@arboretuminvestments.net", now),
+    )
+    conn.execute(
+        "UPDATE users SET is_admin = 1 WHERE email = ?",
+        ("avi@arboretuminvestments.net",),
+    )
+    avi_id = conn.execute(
+        "SELECT id FROM users WHERE email = ?", ("avi@arboretuminvestments.net",)
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT OR IGNORE INTO portfolios (owner_user_id, name) VALUES (?, ?)",
+        (avi_id, "Avi's Portfolio"),
+    )
+    avi_portfolio_id = conn.execute(
+        "SELECT id FROM portfolios WHERE owner_user_id = ?", (avi_id,)
+    ).fetchone()[0]
+
+    # Rebuild the old per-position watchlist as a global security catalog.
+    # Copy its position fields into Avi's portfolio before dropping them.
+    if _column_exists(conn, "watchlist", "weight"):
+        conn.executescript(
+            """
+            ALTER TABLE watchlist RENAME TO watchlist_v3;
+            CREATE TABLE watchlist (
+                ticker                TEXT PRIMARY KEY,
+                cik                   TEXT NOT NULL,
+                legal_name            TEXT NOT NULL,
+                aliases_json          TEXT NOT NULL DEFAULT '[]',
+                products_json         TEXT NOT NULL DEFAULT '[]',
+                executives_json       TEXT NOT NULL DEFAULT '[]',
+                ir_feed_url           TEXT,
+                ir_feed_status        TEXT NOT NULL DEFAULT 'none'
+                                          CHECK (ir_feed_status IN ('ok', 'none')),
+                shares_outstanding    INTEGER,
+                enrichment_confidence TEXT
+                                          CHECK (enrichment_confidence IN ('high', 'medium', 'low')),
+                enriched_at           TEXT,
+                industry              TEXT
+            );
+            INSERT INTO watchlist (
+                ticker, cik, legal_name, aliases_json, products_json,
+                executives_json, ir_feed_url, ir_feed_status,
+                shares_outstanding, enrichment_confidence, enriched_at, industry
+            )
+            SELECT ticker, cik, legal_name, aliases_json, products_json,
+                   executives_json, ir_feed_url, ir_feed_status,
+                   shares_outstanding, enrichment_confidence, enriched_at, industry
+            FROM watchlist_v3;
+            """
+        )
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_holdings (
+            portfolio_id   INTEGER NOT NULL REFERENCES portfolios (id),
+            ticker         TEXT NOT NULL REFERENCES watchlist (ticker),
+            weight         REAL NOT NULL DEFAULT 0,
+            active         INTEGER NOT NULL DEFAULT 1,
+            added_at       TEXT NOT NULL,
+            deactivated_at TEXT,
+            PRIMARY KEY (portfolio_id, ticker)
+        );
+        CREATE INDEX IF NOT EXISTS idx_portfolio_holdings_active
+            ON portfolio_holdings (portfolio_id, active, ticker);
+        """
+    )
+    if _table_exists(conn, "watchlist_v3"):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO portfolio_holdings
+                (portfolio_id, ticker, weight, active, added_at, deactivated_at)
+            SELECT ?, ticker, weight, active, added_at, deactivated_at
+            FROM watchlist_v3
+            """,
+            (avi_portfolio_id,),
+        )
+        conn.execute("DROP TABLE watchlist_v3")
+
+    if not _column_exists(conn, "calendar_events", "portfolio_id"):
+        conn.execute(
+            "ALTER TABLE calendar_events ADD COLUMN portfolio_id INTEGER "
+            "REFERENCES portfolios(id)"
+        )
+    conn.execute(
+        "UPDATE calendar_events SET portfolio_id = ? "
+        "WHERE source = 'manual' AND portfolio_id IS NULL",
+        (avi_portfolio_id,),
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_calendar_portfolio "
+        "ON calendar_events (portfolio_id, event_date)"
+    )
+
+    if not _column_exists(conn, "web_jobs", "portfolio_id"):
+        conn.execute(
+            "ALTER TABLE web_jobs ADD COLUMN portfolio_id INTEGER "
+            "REFERENCES portfolios(id)"
+        )
+
+    # SQLite cannot replace a primary key in place, so rebuild the date-keyed
+    # digest archive and assign all historical PDFs to Avi.
+    digest_pk = [
+        r["name"]
+        for r in conn.execute("PRAGMA table_info(digests)")
+        if r["pk"]
+    ]
+    if digest_pk == ["date"]:
+        conn.executescript(
+            """
+            ALTER TABLE digests RENAME TO digests_v3;
+            CREATE TABLE digests (
+                portfolio_id INTEGER NOT NULL REFERENCES portfolios (id),
+                date         TEXT NOT NULL,
+                built_at     TEXT NOT NULL,
+                sent_at      TEXT,
+                pdf_path     TEXT NOT NULL,
+                PRIMARY KEY (portfolio_id, date)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) "
+            "SELECT ?, date, built_at, sent_at, pdf_path FROM digests_v3",
+            (avi_portfolio_id,),
+        )
+        conn.execute("DROP TABLE digests_v3")
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone() is not None
+
+
 # Incremental migrations keyed by the version they upgrade *to*. Each is applied
 # in order for DBs older than SCHEMA_VERSION. Fresh DBs get the full schema.sql
 # (already at SCHEMA_VERSION) and skip these. A value is either an idempotent SQL
@@ -65,6 +220,7 @@ _MIGRATIONS: dict[int, "str | object"] = {
         CREATE INDEX IF NOT EXISTS idx_web_jobs_started ON web_jobs (started_at);
     """,
     3: _migrate_v3,
+    4: _migrate_v4,
 }
 
 

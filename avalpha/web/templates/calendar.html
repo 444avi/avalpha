@@ -14,11 +14,11 @@
     <p class="section-label">Agenda</p>
     <div class="cal-head-actions">
       {% if show_passed %}
-        <a class="mini" href="/calendar">Hide past</a>
+        <a class="mini" href="/calendar{{ view_suffix }}">Hide past</a>
       {% else %}
-        <a class="mini" href="/calendar?passed=1">Show past</a>
+        <a class="mini" href="/calendar?passed=1{{ '&portfolio_id=' ~ portfolio_access.portfolio_id if read_only else '' }}">Show past</a>
       {% endif %}
-      <details class="add-event">
+      {% if not read_only %}<details class="add-event">
         <summary class="btn btn-gold">Add event</summary>
         <form class="add-event-form" method="post" action="/calendar/add">
           <input name="title" placeholder="Title (e.g. Investor day)" maxlength="120" required>
@@ -32,7 +32,7 @@
           </select>
           <button class="btn" type="submit">Save</button>
         </form>
-      </details>
+      </details>{% endif %}
     </div>
   </div>
 
@@ -54,7 +54,7 @@
               <span class="cal-rel muted">{{ e.rel }}</span>
             </td>
             <td class="cal-what">
-              {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
+              {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}{{ view_suffix }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
               <span class="cal-kind">{{ e.label }}</span>
             </td>
             <td class="cal-title">{{ e.title }}</td>
@@ -63,7 +63,7 @@
               {% if e.chip %}<span class="tag {{ e.chip_class }}">{{ e.chip }}</span>{% endif %}
             </td>
             <td class="row-actions cal-actions">
-              {% if e.editable %}
+              {% if e.editable and not read_only %}
               <details class="cal-edit">
                 <summary class="mini">edit</summary>
                 <form class="cal-edit-form" method="post" action="/calendar/{{ e.id }}/edit">

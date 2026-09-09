@@ -4,6 +4,11 @@ Portfolio monitoring service. Watches public information about a watchlist of
 held tickers and emails a morning PDF digest — one page per holding. Phase 1:
 no instant alerts, batch delivery only.
 
+The web console gives each verified email one isolated portfolio while sharing
+company metadata and collected/scored public information globally. The
+database-backed administrator can inspect other portfolios read-only from
+`/admin`; scheduled digest runs build and email separate PDFs for every owner.
+
 Pipeline (each stage has one job; failures are diagnosable per stage):
 
 ```

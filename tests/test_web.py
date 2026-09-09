@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from avalpha import db
+from avalpha import accounts, db, watchlist
 from avalpha.config import Config
 from avalpha.web.app import create_app
 
@@ -24,10 +24,12 @@ def cfg(tmp_path: Path) -> Config:
 @pytest.fixture
 def seeded(cfg: Config) -> Config:
     conn = db.connect(cfg.db_path)  # runs migrations to current version
-    conn.execute(
-        "INSERT INTO watchlist (ticker, cik, legal_name, weight, active, added_at) "
-        "VALUES ('NVDA', '0001045810', 'NVIDIA CORP', 12, 1, ?)",
-        (db.utcnow(),),
+    user = accounts.resolve_login(conn, "member@thesilofund.com")
+    watchlist.upsert(
+        conn, ticker="NVDA", cik="0001045810", legal_name="NVIDIA CORP",
+        aliases=[], products=[], executives=[], ir_feed_url=None,
+        ir_feed_status="none", weight=12, shares_outstanding=None,
+        enrichment_confidence="high", portfolio_id=user.portfolio_id,
     )
     conn.execute(
         "INSERT INTO items (id, source, url, url_hash, title, fetched_at) "
@@ -112,7 +114,9 @@ def test_set_weight(seeded, monkeypatch):
     r = c.post("/holding/NVDA/weight", data={"weight": "7.5"})
     assert r.status_code == 303
     conn = db.connect(seeded.db_path)
-    assert conn.execute("SELECT weight FROM watchlist WHERE ticker='NVDA'").fetchone()[0] == 7.5
+    assert conn.execute(
+        "SELECT weight FROM portfolio_holdings WHERE ticker='NVDA'"
+    ).fetchone()[0] == 7.5
 
 
 def test_weight_out_of_range_rejected(seeded, monkeypatch):
@@ -125,9 +129,13 @@ def test_deactivate_and_reactivate(seeded, monkeypatch):
     c = client(seeded, monkeypatch)
     assert c.post("/holding/NVDA/deactivate").status_code == 303
     conn = db.connect(seeded.db_path)
-    assert conn.execute("SELECT active FROM watchlist WHERE ticker='NVDA'").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT active FROM portfolio_holdings WHERE ticker='NVDA'"
+    ).fetchone()[0] == 0
     c.post("/holding/NVDA/activate")
-    assert conn.execute("SELECT active FROM watchlist WHERE ticker='NVDA'").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT active FROM portfolio_holdings WHERE ticker='NVDA'"
+    ).fetchone()[0] == 1
 
 
 def test_bad_ticker_add_rejected(seeded, monkeypatch):
@@ -139,7 +147,7 @@ def test_bad_ticker_add_rejected(seeded, monkeypatch):
 # -- job guardrails ---------------------------------------------------------
 
 def test_unknown_job_rejected(seeded, monkeypatch):
-    c = client(seeded, monkeypatch)
+    c = client(seeded, monkeypatch, dev_user="avi@arboretuminvestments.net")
     r = c.post("/jobs/collector:bogus")
     assert "err=" in r.headers["location"]
 

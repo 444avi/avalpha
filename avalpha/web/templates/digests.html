@@ -10,7 +10,7 @@
 <section class="block">
   <div class="block-head">
     <p class="section-label">Archive</p>
-    <form method="post" action="/jobs/digest"><button class="btn btn-gold run" data-confirm="Build today's digest PDF now?">Build today's digest</button></form>
+    {% if show_ops %}<form method="post" action="/jobs/digest"><button class="btn btn-gold run" data-confirm="Build today's digest PDF now?">Build today's digest</button></form>{% endif %}
   </div>
   <div class="table-scroll">
   <table class="grid">
@@ -21,7 +21,7 @@
         <td class="tkr">{{ d.date }}</td>
         <td class="muted">{{ d.built_at | shortdt }}</td>
         <td class="{{ 'pos' if d.sent_at else 'muted' }}">{{ d.sent_at | shortdt if d.sent_at else 'not sent' }}</td>
-        <td class="num"><a class="btn btn-ghost small" href="/digests/{{ d.date }}.pdf">Download PDF</a></td>
+        <td class="num"><a class="btn btn-ghost small" href="/digests/{{ d.date }}.pdf{{ view_suffix }}">Download PDF</a></td>
       </tr>
       {% else %}
       <tr><td colspan="4" class="empty">No digests built yet.</td></tr>

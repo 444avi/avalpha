@@ -47,12 +47,22 @@ class JobRunner:
 
     # -- public API ---------------------------------------------------------
 
-    def trigger(self, job_key: str, member_email: str) -> TriggerResult:
+    def trigger(
+        self,
+        job_key: str,
+        member_email: str,
+        portfolio_id: int | None = None,
+    ) -> TriggerResult:
         """Validate guardrails and, if clear, start the job in a thread."""
         family = job_key.split(":", 1)[0]
+        run_key = (
+            f"{job_key}@portfolio:{portfolio_id}"
+            if family == "enrich" and portfolio_id is not None
+            else job_key
+        )
         now = time.monotonic()
         with self._lock:
-            if job_key in self._state.running:
+            if run_key in self._state.running:
                 return TriggerResult(False, f"{job_key} is already running.")
             if len(self._state.running) >= MAX_CONCURRENT:
                 return TriggerResult(
@@ -65,31 +75,40 @@ class JobRunner:
                     return TriggerResult(
                         False, f"{family} just ran — wait {wait}s before re-running."
                     )
-            self._state.running.add(job_key)
+            self._state.running.add(run_key)
 
-        job_id = self._record_start(job_key, member_email)
+        job_id = self._record_start(job_key, member_email, portfolio_id)
         thread = threading.Thread(
-            target=self._run, args=(job_key, family, job_id), daemon=True
+            target=self._run,
+            args=(job_key, run_key, family, job_id, portfolio_id),
+            daemon=True,
         )
         thread.start()
         return TriggerResult(True, f"Started {job_key}.", job_id=job_id)
 
     # -- execution ----------------------------------------------------------
 
-    def _run(self, job_key: str, family: str, job_id: int) -> None:
+    def _run(
+        self,
+        job_key: str,
+        run_key: str,
+        family: str,
+        job_id: int,
+        portfolio_id: int | None,
+    ) -> None:
         status, output = "ok", ""
         try:
-            output = self._dispatch(job_key)
+            output = self._dispatch(job_key, portfolio_id)
         except Exception:  # noqa: BLE001 - surface any failure to the UI
             status = "error"
             output = traceback.format_exc()
         finally:
             self._record_finish(job_id, status, output)
             with self._lock:
-                self._state.running.discard(job_key)
+                self._state.running.discard(run_key)
                 self._state.last_finished[family] = time.monotonic()
 
-    def _dispatch(self, job_key: str) -> str:
+    def _dispatch(self, job_key: str, portfolio_id: int | None = None) -> str:
         """Run one job with a fresh connection. Returns a short result string."""
         conn = db.connect(self.config.db_path)
         try:
@@ -108,17 +127,19 @@ class JobRunner:
                 scored, errors = drain(self.config, conn, limit=200)
                 return f"scored={scored} errors={errors}"
             if job_key == "digest":
-                from avalpha.digest.build import build_digest
+                from avalpha.digest.build import build_all_digests
 
-                path = build_digest(self.config, conn)
-                return f"built {path}"
+                paths = build_all_digests(self.config, conn)
+                return f"built {len(paths)} portfolio digest(s)"
             if job_key.startswith("enrich:"):
-                return self._enrich(conn, job_key.split(":", 1)[1])
+                if portfolio_id is None:
+                    raise ValueError("enrichment requires a portfolio_id")
+                return self._enrich(conn, job_key.split(":", 1)[1], portfolio_id)
             raise ValueError(f"unknown job {job_key!r}")
         finally:
             conn.close()
 
-    def _enrich(self, conn, ticker: str) -> str:
+    def _enrich(self, conn, ticker: str, portfolio_id: int) -> str:
         """Add/refresh a holding: SEC + web-search enrichment, then upsert."""
         from avalpha import watchlist
         from avalpha.enrich import enrich
@@ -139,6 +160,7 @@ class JobRunner:
             shares_outstanding=result.shares_outstanding,
             enrichment_confidence=result.confidence,
             industry=result.industry,
+            portfolio_id=portfolio_id,
         )
         return (
             f"added {result.ticker} — {result.legal_name} "
@@ -147,13 +169,16 @@ class JobRunner:
 
     # -- web_jobs bookkeeping ----------------------------------------------
 
-    def _record_start(self, job_key: str, member_email: str) -> int:
+    def _record_start(
+        self, job_key: str, member_email: str, portfolio_id: int | None
+    ) -> int:
         conn = db.connect(self.config.db_path)
         try:
             cur = conn.execute(
-                "INSERT INTO web_jobs (job, status, triggered_by, started_at) "
-                "VALUES (?, 'running', ?, ?)",
-                (job_key, member_email, db.utcnow()),
+                "INSERT INTO web_jobs "
+                "(job, status, triggered_by, started_at, portfolio_id) "
+                "VALUES (?, 'running', ?, ?, ?)",
+                (job_key, member_email, db.utcnow(), portfolio_id),
             )
             conn.commit()
             return cur.lastrowid

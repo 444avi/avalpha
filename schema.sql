@@ -1,5 +1,19 @@
--- avalpha schema v3. Applied via PRAGMA user_version migrations in db.py.
+-- avalpha schema v4. Applied via PRAGMA user_version migrations in db.py.
 -- All timestamps are UTC ISO-8601 strings ("YYYY-MM-DDTHH:MM:SSZ").
+
+CREATE TABLE users (
+    id            INTEGER PRIMARY KEY,
+    email         TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    is_admin      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    last_login_at TEXT
+);
+
+CREATE TABLE portfolios (
+    id            INTEGER PRIMARY KEY,
+    owner_user_id INTEGER NOT NULL UNIQUE REFERENCES users (id),
+    name          TEXT NOT NULL
+);
 
 CREATE TABLE watchlist (
     ticker                TEXT PRIMARY KEY,
@@ -10,15 +24,23 @@ CREATE TABLE watchlist (
     executives_json       TEXT NOT NULL DEFAULT '[]',
     ir_feed_url           TEXT,
     ir_feed_status        TEXT NOT NULL DEFAULT 'none' CHECK (ir_feed_status IN ('ok', 'none')),
-    weight                REAL NOT NULL DEFAULT 0,
     shares_outstanding    INTEGER,
     enrichment_confidence TEXT CHECK (enrichment_confidence IN ('high', 'medium', 'low')),
     enriched_at           TEXT,
-    industry              TEXT,               -- profile2.finnhubIndustry; gates bio (PDUFA) events
-    active                INTEGER NOT NULL DEFAULT 1,
-    added_at              TEXT NOT NULL,
-    deactivated_at        TEXT
+    industry              TEXT                -- profile2.finnhubIndustry; gates bio (PDUFA) events
 );
+
+CREATE TABLE portfolio_holdings (
+    portfolio_id  INTEGER NOT NULL REFERENCES portfolios (id),
+    ticker        TEXT NOT NULL REFERENCES watchlist (ticker),
+    weight        REAL NOT NULL DEFAULT 0,
+    active        INTEGER NOT NULL DEFAULT 1,
+    added_at      TEXT NOT NULL,
+    deactivated_at TEXT,
+    PRIMARY KEY (portfolio_id, ticker)
+);
+CREATE INDEX idx_portfolio_holdings_active
+    ON portfolio_holdings (portfolio_id, active, ticker);
 
 CREATE TABLE items (
     id           INTEGER PRIMARY KEY,
@@ -99,10 +121,12 @@ CREATE TABLE collector_runs (
 CREATE INDEX idx_runs_source ON collector_runs (source, started_at);
 
 CREATE TABLE digests (
-    date     TEXT PRIMARY KEY,     -- trading day covered, YYYY-MM-DD
-    built_at TEXT NOT NULL,
-    sent_at  TEXT,
-    pdf_path TEXT NOT NULL
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios (id),
+    date         TEXT NOT NULL,     -- trading day covered, YYYY-MM-DD
+    built_at     TEXT NOT NULL,
+    sent_at      TEXT,
+    pdf_path     TEXT NOT NULL,
+    PRIMARY KEY (portfolio_id, date)
 );
 
 -- Web console job runs: on-demand collector/matcher/scorer/digest triggers
@@ -114,7 +138,8 @@ CREATE TABLE IF NOT EXISTS web_jobs (
     triggered_by TEXT,              -- member email from Cloudflare Access
     started_at   TEXT NOT NULL,
     finished_at  TEXT,
-    output       TEXT
+    output       TEXT,
+    portfolio_id INTEGER REFERENCES portfolios (id)
 );
 CREATE INDEX IF NOT EXISTS idx_web_jobs_started ON web_jobs (started_at);
 
@@ -123,6 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_web_jobs_started ON web_jobs (started_at);
 -- never the content. All writes are upserts on dedup_key (see calendar_store).
 CREATE TABLE calendar_events (
     id            INTEGER PRIMARY KEY,
+    portfolio_id  INTEGER REFERENCES portfolios (id), -- set only for manual events
     ticker        TEXT,               -- NULL = macro / market-wide. Not FK-constrained
                                       -- (macro rows are tickerless; keep events for
                                       -- deactivated holdings).
@@ -150,3 +176,12 @@ CREATE TABLE calendar_events (
 );
 CREATE INDEX idx_calendar_date   ON calendar_events (event_date);
 CREATE INDEX idx_calendar_ticker ON calendar_events (ticker, event_date);
+CREATE INDEX idx_calendar_portfolio ON calendar_events (portfolio_id, event_date);
+
+-- The existing single-user deployment belongs to Avi. New logins are
+-- provisioned by avalpha.accounts with their own empty portfolio.
+INSERT INTO users (email, is_admin, created_at)
+VALUES ('avi@arboretuminvestments.net', 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+INSERT INTO portfolios (owner_user_id, name)
+SELECT id, 'Avi''s Portfolio' FROM users
+WHERE email = 'avi@arboretuminvestments.net';

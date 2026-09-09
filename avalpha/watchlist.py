@@ -1,4 +1,4 @@
-"""Watchlist store. Removal deactivates; rows are never deleted."""
+"""Global security catalog and portfolio-scoped holding store."""
 
 import json
 import sqlite3
@@ -35,28 +35,80 @@ class Holding:
             executives=json.loads(row["executives_json"]),
             ir_feed_url=row["ir_feed_url"],
             ir_feed_status=row["ir_feed_status"],
-            weight=row["weight"],
+            weight=float(row["weight"]) if "weight" in keys and row["weight"] is not None else 0.0,
             shares_outstanding=row["shares_outstanding"],
             enrichment_confidence=row["enrichment_confidence"],
-            active=bool(row["active"]),
+            active=bool(row["active"]) if "active" in keys and row["active"] is not None else False,
             industry=row["industry"] if "industry" in keys else None,
         )
 
 
-def get(conn: sqlite3.Connection, ticker: str) -> Holding | None:
-    row = conn.execute("SELECT * FROM watchlist WHERE ticker = ?", (ticker,)).fetchone()
+def _default_portfolio_id(conn: sqlite3.Connection) -> int:
+    from avalpha.accounts import default_portfolio_id
+
+    return default_portfolio_id(conn)
+
+
+def get(
+    conn: sqlite3.Connection, ticker: str, portfolio_id: int | None = None
+) -> Holding | None:
+    """Get global metadata plus position state for one portfolio."""
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
+    row = conn.execute(
+        """
+        SELECT w.*, ph.weight, ph.active
+        FROM watchlist w
+        LEFT JOIN portfolio_holdings ph
+          ON ph.ticker = w.ticker AND ph.portfolio_id = ?
+        WHERE w.ticker = ?
+        """,
+        (portfolio_id, ticker.upper()),
+    ).fetchone()
     return Holding.from_row(row) if row else None
 
 
-def active(conn: sqlite3.Connection) -> list[Holding]:
-    rows = conn.execute(
-        "SELECT * FROM watchlist WHERE active = 1 ORDER BY ticker"
-    ).fetchall()
+def active(
+    conn: sqlite3.Connection, portfolio_id: int | None = None
+) -> list[Holding]:
+    """Active holdings for a portfolio, or the distinct global collector universe."""
+    if portfolio_id is None:
+        rows = conn.execute(
+            """
+            SELECT w.*, 0.0 AS weight, 1 AS active
+            FROM watchlist w
+            WHERE EXISTS (
+                SELECT 1 FROM portfolio_holdings ph
+                WHERE ph.ticker = w.ticker AND ph.active = 1
+            )
+            ORDER BY w.ticker
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT w.*, ph.weight, ph.active
+            FROM portfolio_holdings ph JOIN watchlist w ON w.ticker = ph.ticker
+            WHERE ph.portfolio_id = ? AND ph.active = 1
+            ORDER BY w.ticker
+            """,
+            (portfolio_id,),
+        ).fetchall()
     return [Holding.from_row(r) for r in rows]
 
 
-def all_holdings(conn: sqlite3.Connection) -> list[Holding]:
-    rows = conn.execute("SELECT * FROM watchlist ORDER BY ticker").fetchall()
+def all_holdings(
+    conn: sqlite3.Connection, portfolio_id: int | None = None
+) -> list[Holding]:
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
+    rows = conn.execute(
+        """
+        SELECT w.*, ph.weight, ph.active
+        FROM portfolio_holdings ph JOIN watchlist w ON w.ticker = ph.ticker
+        WHERE ph.portfolio_id = ?
+        ORDER BY ph.active DESC, ph.weight DESC, w.ticker
+        """,
+        (portfolio_id,),
+    ).fetchall()
     return [Holding.from_row(r) for r in rows]
 
 
@@ -71,18 +123,21 @@ def upsert(
     executives: list[str],
     ir_feed_url: str | None,
     ir_feed_status: str,
-    weight: float,
+    weight: float = 0.0,
     shares_outstanding: int | None,
     enrichment_confidence: str,
     industry: str | None = None,
+    portfolio_id: int | None = None,
 ) -> None:
+    """Upsert catalog metadata and add/reactivate one portfolio position."""
     now = utcnow()
+    ticker = ticker.upper()
     conn.execute(
         """
         INSERT INTO watchlist (ticker, cik, legal_name, aliases_json, products_json,
-            executives_json, ir_feed_url, ir_feed_status, weight, shares_outstanding,
-            enrichment_confidence, industry, enriched_at, active, added_at, deactivated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL)
+            executives_json, ir_feed_url, ir_feed_status, shares_outstanding,
+            enrichment_confidence, industry, enriched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (ticker) DO UPDATE SET
             cik = excluded.cik,
             legal_name = excluded.legal_name,
@@ -91,14 +146,10 @@ def upsert(
             executives_json = excluded.executives_json,
             ir_feed_url = excluded.ir_feed_url,
             ir_feed_status = excluded.ir_feed_status,
-            weight = excluded.weight,
             shares_outstanding = excluded.shares_outstanding,
             enrichment_confidence = excluded.enrichment_confidence,
-            -- keep an existing industry if this enrich pass didn't resolve one
             industry = COALESCE(excluded.industry, watchlist.industry),
-            enriched_at = excluded.enriched_at,
-            active = 1,
-            deactivated_at = NULL
+            enriched_at = excluded.enriched_at
         """,
         (
             ticker,
@@ -109,40 +160,100 @@ def upsert(
             json.dumps(executives),
             ir_feed_url,
             ir_feed_status,
-            weight,
             shares_outstanding,
             enrichment_confidence,
             industry,
             now,
-            now,
         ),
     )
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
+    conn.execute(
+        """
+        INSERT INTO portfolio_holdings
+            (portfolio_id, ticker, weight, active, added_at, deactivated_at)
+        VALUES (?, ?, ?, 1, ?, NULL)
+        ON CONFLICT (portfolio_id, ticker) DO UPDATE SET
+            weight = excluded.weight, active = 1, deactivated_at = NULL
+        """,
+        (portfolio_id, ticker, weight, now),
+    )
     conn.commit()
+
+
+def add_existing(
+    conn: sqlite3.Connection, portfolio_id: int, ticker: str, weight: float = 0.0
+) -> bool:
+    """Add an already-enriched catalog security to a portfolio."""
+    if conn.execute(
+        "SELECT 1 FROM watchlist WHERE ticker = ?", (ticker.upper(),)
+    ).fetchone() is None:
+        return False
+    now = utcnow()
+    conn.execute(
+        """
+        INSERT INTO portfolio_holdings
+            (portfolio_id, ticker, weight, active, added_at, deactivated_at)
+        VALUES (?, ?, ?, 1, ?, NULL)
+        ON CONFLICT (portfolio_id, ticker) DO UPDATE SET
+            active = 1, deactivated_at = NULL
+        """,
+        (portfolio_id, ticker.upper(), weight, now),
+    )
+    conn.commit()
+    return True
 
 
 def set_industry(conn: sqlite3.Connection, ticker: str, industry: str | None) -> bool:
-    """Persist profile2.finnhubIndustry (calendar collector / enrich). Bio gate."""
     if not industry:
         return False
     cur = conn.execute(
-        "UPDATE watchlist SET industry = ? WHERE ticker = ?", (industry, ticker)
+        "UPDATE watchlist SET industry = ? WHERE ticker = ?", (industry, ticker.upper())
     )
     conn.commit()
     return cur.rowcount > 0
 
 
-def deactivate(conn: sqlite3.Connection, ticker: str) -> bool:
+def deactivate(
+    conn: sqlite3.Connection, ticker: str, portfolio_id: int | None = None
+) -> bool:
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
     cur = conn.execute(
-        "UPDATE watchlist SET active = 0, deactivated_at = ? WHERE ticker = ? AND active = 1",
-        (utcnow(), ticker),
+        """
+        UPDATE portfolio_holdings SET active = 0, deactivated_at = ?
+        WHERE portfolio_id = ? AND ticker = ? AND active = 1
+        """,
+        (utcnow(), portfolio_id, ticker.upper()),
     )
     conn.commit()
     return cur.rowcount > 0
 
 
-def set_weight(conn: sqlite3.Connection, ticker: str, weight: float) -> bool:
+def activate(
+    conn: sqlite3.Connection, ticker: str, portfolio_id: int | None = None
+) -> bool:
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
     cur = conn.execute(
-        "UPDATE watchlist SET weight = ? WHERE ticker = ?", (weight, ticker)
+        """
+        UPDATE portfolio_holdings SET active = 1, deactivated_at = NULL
+        WHERE portfolio_id = ? AND ticker = ?
+        """,
+        (portfolio_id, ticker.upper()),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def set_weight(
+    conn: sqlite3.Connection,
+    ticker: str,
+    weight: float,
+    portfolio_id: int | None = None,
+) -> bool:
+    portfolio_id = portfolio_id or _default_portfolio_id(conn)
+    cur = conn.execute(
+        "UPDATE portfolio_holdings SET weight = ? "
+        "WHERE portfolio_id = ? AND ticker = ?",
+        (weight, portfolio_id, ticker.upper()),
     )
     conn.commit()
     return cur.rowcount > 0

@@ -10,9 +10,11 @@
     <span class="stat-dot">·</span>
     <div class="stat"><span class="stat-num">{{ '%g' % total_weight }}<span class="stat-unit">%</span></span><span class="stat-label">Weight allocated</span></div>
     <span class="stat-dot">·</span>
-    <div class="stat"><span class="stat-num">{{ health.queues.awaiting_scorer }}</span><span class="stat-label">Awaiting scorer</span></div>
-    <span class="stat-dot">·</span>
-    <div class="stat"><span class="stat-num">{{ health.digest.date if health.digest else '—' }}</span><span class="stat-label">Latest digest</span></div>
+    {% if show_ops %}
+      <div class="stat"><span class="stat-num">{{ health.queues.awaiting_scorer }}</span><span class="stat-label">Awaiting scorer</span></div>
+      <span class="stat-dot">·</span>
+      <div class="stat"><span class="stat-num">{{ health.digest.date if health.digest else '—' }}</span><span class="stat-label">Latest digest</span></div>
+    {% endif %}
   </div>
 </section>
 
@@ -21,13 +23,13 @@
 <section class="block">
   <div class="block-head">
     <p class="section-label">Upcoming · next 7 days</p>
-    <a class="mini" href="/calendar">Full calendar →</a>
+    <a class="mini" href="/calendar{{ view_suffix }}">Full calendar →</a>
   </div>
   <div class="upcoming-strip">
     {% for e in upcoming %}
     <div class="up-item {{ 'up-near' if e.near else '' }}">
       <div class="up-when">
-        {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
+        {% if e.ticker %}<a class="tkr" href="/holding/{{ e.ticker }}{{ view_suffix }}">{{ e.ticker }}</a>{% else %}<span class="tag macro">macro</span>{% endif %}
         <span class="up-rel muted">{{ e.rel }}</span>
       </div>
       <div class="up-label">{{ e.label }}{% if e.when %} <span class="muted">· {{ e.when }}</span>{% endif %}</div>
@@ -42,10 +44,10 @@
 <section class="block">
   <div class="block-head">
     <p class="section-label">Portfolio</p>
-    <form class="add-form" method="post" action="/holding/add">
+    {% if not read_only %}<form class="add-form" method="post" action="/holding/add{{ view_suffix }}">
       <input name="ticker" placeholder="Add ticker (e.g. NVDA)" maxlength="6" autocomplete="off" required>
       <button class="btn btn-gold" type="submit">Add holding</button>
-    </form>
+    </form>{% endif %}
   </div>
   <div class="table-scroll">
   <table class="grid">
@@ -56,26 +58,28 @@
       {% for h in holdings %}
       <tr class="{{ '' if h.active else 'inactive' }}">
         <td>
-          <a class="tkr" href="/holding/{{ h.ticker }}">{{ h.ticker }}</a>{% if not h.active %} <span class="tag">inactive</span>{% endif %}
+          <a class="tkr" href="/holding/{{ h.ticker }}{{ view_suffix }}">{{ h.ticker }}</a>{% if not h.active %} <span class="tag">inactive</span>{% endif %}
           {% set b = badges.get(h.ticker) %}
-          {% if b %}<a class="cal-badge {{ 'near' if b.near else '' }}" href="/calendar" title="{{ b.title }}">{{ b.label }} {{ b.rel }}</a>{% endif %}
+          {% if b %}<a class="cal-badge {{ 'near' if b.near else '' }}" href="/calendar{{ view_suffix }}" title="{{ b.title }}">{{ b.label }} {{ b.rel }}</a>{% endif %}
         </td>
         <td class="name">{{ h.legal_name }}</td>
         <td class="num">
-          <form class="weight-form" method="post" action="/holding/{{ h.ticker }}/weight">
+          {% if read_only %}{{ '%g' % h.weight }}%{% else %}<form class="weight-form" method="post" action="/holding/{{ h.ticker }}/weight{{ view_suffix }}">
             <input class="weight-input" type="number" name="weight" step="0.1" min="0" max="100" value="{{ '%g' % h.weight }}" aria-label="{{ h.ticker }} weight">
             <button class="mini" type="submit" title="Save weight">✓</button>
-          </form>
+          </form>{% endif %}
         </td>
         <td class="num">{% if h.price.close is not none %}${{ '%.2f' % h.price.close }}{% else %}—{% endif %}</td>
         <td class="num {{ 'pos' if h.price.change_pct and h.price.change_pct > 0 else ('neg' if h.price.change_pct and h.price.change_pct < 0 else '') }}">{{ h.price.change_pct | pct }}</td>
         <td class="num">{{ h.market_cap | money }}</td>
         <td class="num">{{ h.scored_7d }}</td>
         <td class="row-actions">
-          {% if h.active %}
-          <form method="post" action="/holding/{{ h.ticker }}/deactivate"><button class="mini danger" data-confirm="Deactivate {{ h.ticker }}? Historical data is kept.">Remove</button></form>
-          {% else %}
-          <form method="post" action="/holding/{{ h.ticker }}/activate"><button class="mini">Restore</button></form>
+          {% if not read_only %}
+            {% if h.active %}
+            <form method="post" action="/holding/{{ h.ticker }}/deactivate"><button class="mini danger" data-confirm="Deactivate {{ h.ticker }}? Historical data is kept.">Remove</button></form>
+            {% else %}
+            <form method="post" action="/holding/{{ h.ticker }}/activate"><button class="mini">Restore</button></form>
+            {% endif %}
           {% endif %}
         </td>
       </tr>
@@ -87,6 +91,7 @@
   </div>
 </section>
 
+{% if show_ops %}
 <!-- PIPELINE HEALTH -->
 <section class="block">
   <div class="block-head"><p class="section-label">Pipeline health</p></div>
@@ -130,6 +135,7 @@
   </details>
   {% endif %}
 </section>
+{% endif %}
 
 <!-- RECENT SIGNALS -->
 <section class="block">

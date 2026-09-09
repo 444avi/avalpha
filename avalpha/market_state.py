@@ -108,8 +108,11 @@ def earnings_escalated(conn, now_utc: datetime) -> bool:
         """
         SELECT 1
         FROM calendar_events c
-        JOIN watchlist w ON w.ticker = c.ticker AND w.active = 1
-        WHERE c.status NOT IN ('passed', 'cancelled')
+        WHERE EXISTS (
+            SELECT 1 FROM portfolio_holdings ph
+            WHERE ph.ticker = c.ticker AND ph.active = 1
+        )
+          AND c.status NOT IN ('passed', 'cancelled')
           AND (
                 (c.kind = 'earnings' AND c.status = 'confirmed')
                 OR c.kind = 'pdufa'

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Admin · {{ fund_name }}{% endblock %}
+{% block content %}
+
+<section class="hero hero-holding">
+  <p class="eyebrow">Administrator</p>
+  <h1>Users.</h1>
+  <p class="lede">Portfolio access is read-only from this directory. Operational controls remain on your own dashboard.</p>
+</section>
+
+<section class="block">
+  <div class="block-head"><p class="section-label">Accounts</p></div>
+  <div class="table-scroll">
+    <table class="grid">
+      <thead><tr><th>Email</th><th class="num">Active holdings</th><th>Last login</th><th></th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.email }}</td>
+          <td class="num">{{ u.active_holdings }}</td>
+          <td class="muted">{{ u.last_login_at | shortdt }}</td>
+          <td class="num">
+            {% if u.id == current_user.id %}
+              <a class="btn btn-ghost small" href="/">Open portfolio</a>
+            {% else %}
+              <a class="btn btn-ghost small" href="/admin/portfolio/{{ u.portfolio_id }}">View read-only</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
