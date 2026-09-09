@@ -25,8 +25,37 @@ class Config:
         return _require_env("ANTHROPIC_API_KEY")
 
     @property
-    def gmail_app_password(self) -> str:
-        return _require_env("GMAIL_APP_PASSWORD")
+    def smtp_host(self) -> str:
+        """Mailtrap SMTP host. When set, email sends over SMTP; when empty,
+        it falls back to Amazon SES via the EC2 instance role."""
+        return os.environ.get("SMTP_HOST", "").strip()
+
+    @property
+    def smtp_port(self) -> int:
+        try:
+            return int(os.environ.get("SMTP_PORT", "587"))
+        except ValueError:
+            return 587
+
+    @property
+    def smtp_user(self) -> str:
+        return os.environ.get("SMTP_USER", "").strip()
+
+    @property
+    def smtp_password(self) -> str:
+        return os.environ.get("SMTP_PASSWORD", "")
+
+    @property
+    def aws_region(self) -> str:
+        return os.environ.get("AWS_REGION", "").strip() or "us-west-1"
+
+    @property
+    def ses_configuration_set(self) -> str:
+        return os.environ.get("SES_CONFIGURATION_SET", "arboretum-notifications").strip()
+
+    @property
+    def reply_to(self) -> str:
+        return os.environ.get("EMAIL_REPLY_TO", "").strip() or "avi@arboretuminvestments.net"
 
     @property
     def reddit_client_id(self) -> str:

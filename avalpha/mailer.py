@@ -1,27 +1,25 @@
-"""Email delivery via Gmail's SMTP relay with an app password.
+"""Email delivery of the daily digest.
 
-Mail originates from Google's servers (not the app host), so the "residential
-IP goes to spam" concern about self-hosting SMTP doesn't apply — and for a
-daily PDF to your own inbox this needs no verified domain or third-party
-service. Requires 2FA on the account plus an app password (GMAIL_APP_PASSWORD).
-The SMTP login is the bare address parsed from the configured sender.
+Two backends behind one send path, chosen by config: SMTP (Mailtrap) when
+``SMTP_HOST`` is set, otherwise Amazon SES via the EC2 instance role (kept as a
+fallback). The From address (config.toml [email] sender) must be an address on
+the verified arboretuminvestments.net domain; replies go to ``config.reply_to``.
+boto3 and smtplib are imported lazily so importing this module needs neither.
 """
 
-import smtplib
 from email.message import EmailMessage
 from email.utils import parseaddr
 from pathlib import Path
 
 from avalpha.config import Config
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 587
-
 
 def build_message(config: Config, pdf_path: Path, label_date: str) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = config.email_sender
     msg["To"] = config.email_recipient
+    if config.reply_to:
+        msg["Reply-To"] = config.reply_to
     msg["Subject"] = f"avalpha digest — {label_date}"
     msg.set_content(
         f"Morning digest covering {label_date} is attached.\n\n— avalpha\n"
@@ -36,13 +34,33 @@ def build_message(config: Config, pdf_path: Path, label_date: str) -> EmailMessa
 
 
 def send_digest_email(config: Config, pdf_path: Path, label_date: str) -> None:
-    msg = build_message(config, pdf_path, label_date)
-    login = parseaddr(config.email_sender)[1]
-    if not login:
+    if not parseaddr(config.email_sender)[1]:
         raise RuntimeError(
-            "email.sender in config.toml must contain a Gmail address"
+            "email.sender in config.toml must contain an address on the "
+            "verified domain (arboretuminvestments.net)"
         )
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=60) as smtp:
-        smtp.starttls()
-        smtp.login(login, config.gmail_app_password)
-        smtp.send_message(msg)
+    if not config.email_recipient:
+        raise RuntimeError("email.recipient in config.toml is not set")
+
+    msg = build_message(config, pdf_path, label_date)
+
+    if config.smtp_host:
+        import smtplib
+
+        with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=60) as smtp:
+            smtp.starttls()
+            if config.smtp_user:
+                smtp.login(config.smtp_user, config.smtp_password)
+            smtp.send_message(msg)
+    else:
+        import boto3
+
+        client = boto3.client("sesv2", region_name=config.aws_region)
+        kwargs = dict(
+            FromEmailAddress=config.email_sender,
+            Destination={"ToAddresses": [config.email_recipient]},
+            Content={"Raw": {"Data": msg.as_bytes()}},
+        )
+        if config.ses_configuration_set:
+            kwargs["ConfigurationSetName"] = config.ses_configuration_set
+        client.send_email(**kwargs)

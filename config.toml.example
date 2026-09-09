@@ -10,10 +10,10 @@ digest_dir = "/opt/avalpha/data/digests"
 
 [email]
 recipient = "you@example.com"
-# Sent via Gmail's SMTP relay: the address here must be the Gmail account that
-# owns GMAIL_APP_PASSWORD (a display name is fine). It's used both as the From
-# header and the SMTP login.
-sender = "avalpha <notifications@example.com>"
+# From address. Must be on the verified arboretuminvestments.net domain (a
+# display name is fine). Mail is sent via Mailtrap SMTP (or Amazon SES as a
+# fallback when SMTP_HOST is empty) -- credentials come from the environment.
+sender = "avalpha <avalpha@arboretuminvestments.net>"
 
 [reddit]
 subreddits = ["stocks", "investing", "wallstreetbets", "StockMarket", "options"]
@@ -30,7 +30,10 @@ narrative = "claude-sonnet-4-6"
 #     local .env next to this file for development) ---
 # ANTHROPIC_API_KEY      required
 # FINNHUB_API_KEY        required for the prices collector
-# GMAIL_APP_PASSWORD     required for sending (test-digest works without it)
+# SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD  Mailtrap SMTP creds for sending
+#                        (host live.smtp.mailtrap.io, port 587, user api, token)
+# EMAIL_REPLY_TO         optional — replies go here (default avi@arboretuminvestments.net)
+# AWS_REGION / SES_CONFIGURATION_SET  only for the SES fallback (SMTP_HOST empty)
 # REDDIT_CLIENT_ID       required for the reddit collector
 # REDDIT_CLIENT_SECRET   required for the reddit collector
 # AVALPHA_CONTACT_EMAIL  required — goes in the SEC EDGAR User-Agent header
