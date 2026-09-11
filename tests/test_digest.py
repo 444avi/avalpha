@@ -25,19 +25,43 @@ def _cfg(tmp_path) -> Config:
                   email_recipient="", email_sender="")
 
 
-def test_window_uses_last_digest(tmp_path):
+def test_window_uses_last_sent_digest(tmp_path):
     conn = connect(tmp_path / "t.db")
     now = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
     start, end = _window(conn, now)
     assert start == "2026-08-02T13:00:00Z"  # first run: trailing 48h
     portfolio_id = conn.execute("SELECT id FROM portfolios").fetchone()[0]
     conn.execute(
-        "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) VALUES "
-        "(?, '2026-08-03', '2026-08-03T13:00:00Z', 'x.pdf')",
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-08-03', '2026-08-03T13:00:00Z', '2026-08-03T13:00:00Z', 'x.pdf')",
         (portfolio_id,),
     )
     start, end = _window(conn, now)
     assert start == "2026-08-03T13:00:00Z"
+    assert end == "2026-08-04T13:00:00Z"
+
+
+def test_window_ignores_unsent_preview_build(tmp_path):
+    """A preview/rebuild that never got sent must not shrink the next window —
+    otherwise it silently drops items and macro releases that fell before it
+    (the two-user PPI divergence)."""
+    conn = connect(tmp_path / "t.db")
+    now = datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc)
+    portfolio_id = conn.execute("SELECT id FROM portfolios").fetchone()[0]
+    # Yesterday's digest was actually sent — the real high-water mark.
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-08-02', '2026-08-03T13:00:00Z', '2026-08-03T13:00:00Z', 'y.pdf')",
+        (portfolio_id,),
+    )
+    # An unsent preview built this morning, after a macro release (~12:30Z).
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) VALUES "
+        "(?, '2026-08-03', '2026-08-04T12:50:00Z', 'preview.pdf')",
+        (portfolio_id,),
+    )
+    start, end = _window(conn, now)
+    assert start == "2026-08-03T13:00:00Z"  # anchored on the sent digest, not the preview
     assert end == "2026-08-04T13:00:00Z"
 
 

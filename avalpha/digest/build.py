@@ -64,9 +64,16 @@ def _window(
         from avalpha.accounts import default_portfolio_id
 
         portfolio_id = default_portfolio_id(conn)
+    # Anchor on the last *sent* digest, not merely the last built one. built_at
+    # is advanced by every build_digest call, including unsent preview rebuilds
+    # (the web-console "digest" job, `avalpha build-digest`). Anchoring on any
+    # build would let a preview that lands mid-morning shrink the real send's
+    # window to minutes, silently dropping scored items and macro releases that
+    # fell before it. Only a sent digest actually delivered content, so it is the
+    # correct high-water mark for "what has this portfolio already covered".
     row = conn.execute(
         "SELECT built_at FROM digests WHERE portfolio_id = ? "
-        "ORDER BY built_at DESC LIMIT 1",
+        "AND sent_at IS NOT NULL ORDER BY built_at DESC LIMIT 1",
         (portfolio_id,),
     ).fetchone()
     if row:
