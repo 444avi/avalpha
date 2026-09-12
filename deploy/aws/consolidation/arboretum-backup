@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /etc/arboretum/backup.conf
+: "${BACKUP_BUCKET:?BACKUP_BUCKET must be set}"
+: "${AWS_REGION:=us-west-1}"
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+umask 077
+
+backup_db() {
+  local app="$1"
+  local source="$2"
+  local name="$3"
+  local destination="$TMP/$app/$name"
+  [ -f "$source" ] || return 0
+  install -d -m 0700 "$TMP/$app"
+  sqlite3 "$source" ".timeout 10000" ".backup '$destination'"
+  test "$(sqlite3 "$destination" 'PRAGMA quick_check;')" = ok
+  sha256sum "$destination" >>"$TMP/manifest.sha256"
+  aws s3 cp "$destination" \
+    "s3://$BACKUP_BUCKET/$app/db/$STAMP-$name" \
+    --region "$AWS_REGION" --only-show-errors
+}
+
+backup_file() {
+  local app="$1"
+  local source="$2"
+  local name="$3"
+  [ -f "$source" ] || return 0
+  aws s3 cp "$source" \
+    "s3://$BACKUP_BUCKET/$app/state/$STAMP-$name" \
+    --region "$AWS_REGION" --only-show-errors
+}
+
+backup_db valence /data/valence/valence.db valence.db
+backup_db avalpha /data/avalpha/avalpha.db avalpha.db
+backup_db sundew /data/sundew/sundew.db sundew.db
+backup_db sundew /data/sundew/sentinel.db sentinel.db
+backup_db sundew /data/sundew/app.db app.db
+backup_db overstory /data/overstory/overstory.db overstory.db
+
+[ -d /data/valence/runs ] && aws s3 sync /data/valence/runs \
+  "s3://$BACKUP_BUCKET/valence/runs/current/" \
+  --region "$AWS_REGION" --only-show-errors
+[ -d /data/avalpha/digests ] && aws s3 sync /data/avalpha/digests \
+  "s3://$BACKUP_BUCKET/avalpha/digests/current/" \
+  --region "$AWS_REGION" --only-show-errors
+backup_file overstory /data/overstory/positions.json positions.json
+backup_file overstory /data/overstory/poll_log.csv poll_log.csv
+
+printf 'completed_at=%s\n' "$STAMP" >"$TMP/completed"
+aws s3 cp "$TMP/manifest.sha256" \
+  "s3://$BACKUP_BUCKET/manifests/$STAMP.sha256" \
+  --region "$AWS_REGION" --only-show-errors
+aws s3 cp "$TMP/completed" \
+  "s3://$BACKUP_BUCKET/manifests/$STAMP.completed" \
+  --region "$AWS_REGION" --only-show-errors
+echo "Backup $STAMP completed"

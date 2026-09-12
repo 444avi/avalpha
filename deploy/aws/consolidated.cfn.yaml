@@ -1,0 +1,501 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Consolidated ARM host for Valence, AVAlpha, Sundew/Sentinel, Overstory, and
+  Teasel. The instance has no inbound security-group rules, is administered
+  through SSM, has one Elastic IPv4 address, and stores application state on a
+  retained 50 GiB gp3 volume.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC containing the public subnet.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet with an internet-gateway route.
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-west-1a
+    Description: Must be the Availability Zone of SubnetId.
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+    AllowedValues: [t4g.medium]
+    Description: Fixed to the requested 4 GiB Graviton target.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Latest Amazon Linux 2023 arm64 image, resolved at deploy time.
+  RootVolumeSizeGb:
+    Type: Number
+    Default: 16
+    MinValue: 8
+    Description: Encrypted gp3 operating-system volume; application state is not stored here.
+  DataVolumeSizeGb:
+    Type: Number
+    Default: 50
+    AllowedValues: [50]
+    Description: Fixed to the requested 50 GiB retained gp3 application-data volume.
+  AlarmTopicArn:
+    Type: String
+    Default: arn:aws:sns:us-west-1:640440227695:valence-alerts
+    Description: Existing confirmed SNS topic for operational alarm notifications.
+  ValenceBackupBucketName:
+    Type: String
+    Default: valence-backupbucket-y1ffmmbli25l
+    Description: Existing Valence backup bucket whose access must be preserved.
+  OverstoryCodeBucketName:
+    Type: String
+    Default: overstory-deploy-640440227695-us-west-1
+    Description: Existing Overstory deployment bucket whose read access must be preserved.
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Consolidated applications - outbound only, no inbound
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS, SMTP, SSM, Cloudflare, and public data sources
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated
+
+  NetworkInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      Description: Primary interface for the consolidated application host
+      SubnetId: !Ref SubnetId
+      GroupSet: [!Ref SecurityGroup]
+      SourceDestCheck: true
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated
+
+  PublicIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated
+
+  PublicIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt PublicIp.AllocationId
+      NetworkInterfaceId: !Ref NetworkInterface
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-backup-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated-backups
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-existing-application-parameters
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadValenceParameters
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/valence/*
+              - Sid: ReadAVAlphaParameters
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/avalpha/env
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/avalpha/env/*
+              - Sid: ReadTeaselParameters
+                Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/teasel/*
+              - Sid: DecryptParameterStoreValues
+                Effect: Allow
+                Action: kms:Decrypt
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+        - PolicyName: preserve-existing-application-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ValenceExistingBackups
+                Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Sub arn:aws:s3:::${ValenceBackupBucketName}
+              - Sid: ValenceExistingBackupObjects
+                Effect: Allow
+                Action: [s3:PutObject]
+                Resource: !Sub arn:aws:s3:::${ValenceBackupBucketName}/*
+              - Sid: ReadOverstoryDeploymentBundle
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:aws:s3:::${OverstoryCodeBucketName}/*
+              - Sid: SendApplicationEmail
+                Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: "*"
+        - PolicyName: write-consolidated-backups-and-metrics
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListConsolidatedBackups
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt BackupBucket.Arn
+              - Sid: ReadWriteConsolidatedBackupObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${BackupBucket.Arn}/*
+              - Sid: PublishHostMetrics
+                Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: Arboretum/Consolidated
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: gp3
+      Size: !Ref DataVolumeSizeGb
+      Iops: 3000
+      Throughput: 125
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated-data
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: PublicIpAssociation
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          NetworkInterfaceId: !Ref NetworkInterface
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: !Ref RootVolumeSizeGb
+            Iops: 3000
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: arboretum-consolidated
+        - Key: Workload
+          Value: valence-avalpha-sundew-sentinel-overstory-teasel
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          dnf -y update
+          dnf -y install \
+            amazon-cloudwatch-agent git nginx rsync sqlite tar gzip xfsprogs \
+            python3.11 python3.11-pip python3.12 python3.12-pip \
+            pango cairo gdk-pixbuf2 libffi dejavu-sans-fonts
+
+          systemctl enable --now amazon-ssm-agent
+
+          for app in valence avalpha sundew overstory teasel; do
+            id "$app" >/dev/null 2>&1 || \
+              useradd --system --home-dir "/opt/$app" --shell /usr/sbin/nologin "$app"
+            install -d -m 0750 -o "$app" -g "$app" "/opt/$app" "/etc/$app"
+          done
+          id cloudflared >/dev/null 2>&1 || \
+            useradd --system --home-dir /var/lib/cloudflared --shell /usr/sbin/nologin cloudflared
+          install -d -m 0750 -o root -g cloudflared /etc/cloudflared
+
+          if [ ! -f /swapfile ]; then
+            fallocate -l 2G /swapfile
+            chmod 0600 /swapfile
+            mkswap /swapfile
+          fi
+          grep -qE '^/swapfile[[:space:]]' /etc/fstab || \
+            echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+          swapon /swapfile || true
+          cat >/etc/sysctl.d/90-arboretum-swap.conf <<'EOF'
+          vm.swappiness=10
+          EOF
+          sysctl --system
+
+          curl -fsSL -o /usr/local/bin/cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod 0755 /usr/local/bin/cloudflared
+
+          cat >/usr/local/sbin/setup-arboretum-data-volume <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          VOLUME_ID='${DataVolume}'
+          SERIAL="$VOLUME_ID"
+          SERIAL="${!SERIAL//-/}"
+          DEVICE=""
+          for attempt in $(seq 1 180); do
+            DEVICE=$(lsblk -ndo PATH,SERIAL | awk -v serial="$SERIAL" '$2 == serial { print $1; exit }')
+            [ -n "$DEVICE" ] && break
+            sleep 2
+          done
+          [ -n "$DEVICE" ] && [ -b "$DEVICE" ]
+          if ! blkid -s TYPE -o value "$DEVICE" >/dev/null 2>&1; then
+            mkfs.xfs -L arb-data "$DEVICE"
+          fi
+          UUID=$(blkid -s UUID -o value "$DEVICE")
+          install -d -m 0755 /data
+          grep -q "UUID=$UUID" /etc/fstab || \
+            echo "UUID=$UUID /data xfs defaults,nofail 0 2" >> /etc/fstab
+          mountpoint -q /data || mount /data
+          for app in valence avalpha sundew overstory teasel; do
+            install -d -m 0750 -o "$app" -g "$app" "/data/$app"
+          done
+          systemctl try-restart amazon-cloudwatch-agent.service || true
+          SCRIPT
+          chmod 0755 /usr/local/sbin/setup-arboretum-data-volume
+
+          cat >/etc/systemd/system/arboretum-data-volume.service <<'EOF'
+          [Unit]
+          Description=Format and mount the retained Arboretum application data volume
+          After=local-fs.target
+          Before=amazon-cloudwatch-agent.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/setup-arboretum-data-volume
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now arboretum-data-volume.service || true
+
+          cat >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+          {
+            "agent": {
+              "metrics_collection_interval": 60,
+              "run_as_user": "root"
+            },
+            "metrics": {
+              "namespace": "Arboretum/Consolidated",
+              "append_dimensions": {
+                "InstanceId": "${!aws:InstanceId}"
+              },
+              "metrics_collected": {
+                "mem": {
+                  "measurement": ["mem_used_percent", "mem_available"],
+                  "metrics_collection_interval": 60
+                },
+                "swap": {
+                  "measurement": ["swap_used_percent"],
+                  "metrics_collection_interval": 60
+                },
+                "disk": {
+                  "measurement": ["used_percent", "free"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["/", "/data"],
+                  "drop_device": true,
+                  "ignore_file_system_types": ["sysfs", "devtmpfs", "tmpfs", "overlay", "squashfs"]
+                }
+              }
+            }
+          }
+          EOF
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+            -a fetch-config -m ec2 \
+            -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+          install -d -m 0750 -o root -g root /etc/arboretum
+          cat >/etc/arboretum/backup.conf <<'EOF'
+          BACKUP_BUCKET=${BackupBucket}
+          AWS_REGION=${AWS::Region}
+          EOF
+          chmod 0600 /etc/arboretum/backup.conf
+
+          echo 'Arboretum consolidated host bootstrap complete'
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      Device: /dev/sdf
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+
+  StatusCheckAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: false
+      AlarmName: arboretum-consolidated-status-check-failed
+      AlarmDescription: EC2 system or instance status check is failing.
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+
+  HighMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: false
+      AlarmName: arboretum-consolidated-memory-high
+      AlarmDescription: Host memory utilization is at least 85 percent for 15 minutes.
+      Namespace: Arboretum/Consolidated
+      MetricName: mem_used_percent
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 85
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+
+  LowAvailableMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: false
+      AlarmName: arboretum-consolidated-memory-available-low
+      AlarmDescription: Available memory is below 512 MiB for 10 minutes.
+      Namespace: Arboretum/Consolidated
+      MetricName: mem_available
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 536870912
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+
+  HighSwapAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: false
+      AlarmName: arboretum-consolidated-swap-high
+      AlarmDescription: More than half of the 2 GiB swap file is in use for 15 minutes.
+      Namespace: Arboretum/Consolidated
+      MetricName: swap_used_percent
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 50
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+
+  DataDiskHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: false
+      AlarmName: arboretum-consolidated-data-disk-high
+      AlarmDescription: The retained application data volume is at least 80 percent full.
+      Namespace: Arboretum/Consolidated
+      MetricName: disk_used_percent
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Instance
+        - Name: path
+          Value: /data
+        - Name: fstype
+          Value: xfs
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlarmTopicArn]
+      OKActions: [!Ref AlarmTopicArn]
+
+Outputs:
+  InstanceId:
+    Value: !Ref Instance
+    Description: Target for SSM Session Manager.
+  PublicIpv4:
+    Value: !Ref PublicIp
+    Description: The instance's single Elastic public IPv4 address.
+  DataVolumeId:
+    Value: !Ref DataVolume
+    Description: Retained 50 GiB gp3 application-state volume.
+  BackupBucketName:
+    Value: !Ref BackupBucket
+    Description: Versioned, retained application backup bucket.
+  InstanceRoleArn:
+    Value: !GetAtt InstanceRole.Arn
+  SessionManagerCommand:
+    Value: !Sub aws ssm start-session --target ${Instance} --region ${AWS::Region}

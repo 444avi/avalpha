@@ -1,0 +1,23 @@
+[Unit]
+Description=Overstory web UI (localhost only)
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data/overstory
+
+[Service]
+Type=simple
+User=overstory
+Group=overstory
+WorkingDirectory=/opt/overstory
+EnvironmentFile=/etc/overstory/env
+ExecStart=/opt/overstory/.venv/bin/python -m overstory web
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/data/overstory
+
+[Install]
+WantedBy=multi-user.target

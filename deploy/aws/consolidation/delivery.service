@@ -1,0 +1,18 @@
+[Unit]
+Description=Sundew and Sentinel notification delivery worker
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data/sundew
+
+[Service]
+Type=simple
+User=sundew
+Group=sundew
+WorkingDirectory=/opt/sundew
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/sundew/.venv/bin/python /opt/sundew/delivery_worker.py --app-db /data/sundew/app.db --env /etc/sundew/env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

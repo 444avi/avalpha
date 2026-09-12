@@ -1,0 +1,30 @@
+[Unit]
+Description=Valence arbitrage screener API
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data/valence
+
+[Service]
+Type=exec
+User=valence
+Group=valence
+WorkingDirectory=/opt/valence
+Environment=VALENCE_HOME=/data/valence
+Environment=VALENCE_ADMIN_EMAIL=avi@arboretuminvestments.net
+Environment=VALENCE_CACHE_TTL_DAYS=60
+ExecStartPre=/opt/valence/.venv/bin/python -m pytest tests/ -q
+ExecStartPre=/opt/valence/deploy/scripts/fetch-secret.sh
+EnvironmentFile=-/run/valence/env
+ExecStart=/opt/valence/.venv/bin/uvicorn web.app:app --host 127.0.0.1 --port 8082
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/data/valence /run/valence
+RuntimeDirectory=valence
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

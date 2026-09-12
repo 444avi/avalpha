@@ -1,0 +1,24 @@
+[Unit]
+Description=Overstory Kalshi profit-exit monitor (read-only, signal-only)
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data/overstory
+
+[Service]
+Type=simple
+User=overstory
+Group=overstory
+WorkingDirectory=/opt/overstory
+EnvironmentFile=/etc/overstory/env
+ExecStart=/opt/overstory/.venv/bin/python -m overstory run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/data/overstory
+
+[Install]
+WantedBy=multi-user.target

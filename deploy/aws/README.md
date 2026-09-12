@@ -1,5 +1,9 @@
 # avalpha on AWS (EC2 + CloudFormation)
 
+The multi-application production consolidation is documented in
+[consolidation/README.md](consolidation/README.md) and provisioned by
+[`consolidated.cfn.yaml`](consolidated.cfn.yaml).
+
 One `t4g.small` EC2 instance runs everything: the collectors (systemd timers),
 the scorer worker, and the 6am PT digest. SQLite lives on the instance's gp3
 root volume — the design is single-host by construction, so one instance is the

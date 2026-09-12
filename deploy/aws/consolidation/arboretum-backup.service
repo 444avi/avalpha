@@ -1,0 +1,13 @@
+[Unit]
+Description=Consistent application-state backup to retained S3 storage
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/flock -n /run/arboretum-backup.lock /usr/local/sbin/arboretum-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

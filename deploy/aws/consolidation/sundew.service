@@ -1,0 +1,19 @@
+[Unit]
+Description=Sundew - Trump Truth Social market-awareness monitor
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/data/sundew
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sundew
+Group=sundew
+WorkingDirectory=/opt/sundew
+ExecStart=/opt/sundew/.venv/bin/python /opt/sundew/sundew.py --db /data/sundew/sundew.db --app-db /data/sundew/app.db --env /etc/sundew/env
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

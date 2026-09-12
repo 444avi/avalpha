@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily consistent backup of all application state
+
+[Timer]
+OnCalendar=*-*-* 07:15:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=arboretum-backup.service
+
+[Install]
+WantedBy=timers.target
