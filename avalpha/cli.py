@@ -124,6 +124,15 @@ def run_collector(source: str, force: bool):
     click.echo(outcome)
 
 
+@main.command(name="run-swing")
+def run_swing():
+    """Poll holdings for ±10% day moves and email opted-in owners (15-min timer)."""
+    from avalpha.swing import run_swing as _run
+
+    config, conn = _conn()
+    click.echo(_run(config, conn))
+
+
 @main.command(name="run-matcher")
 @click.option("--limit", type=int, default=500)
 def run_matcher(limit: int):

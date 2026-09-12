@@ -16,3 +16,11 @@ document.addEventListener("submit", function (e) {
     setTimeout(() => { submitter.disabled = false; }, 8000);
   }
 });
+
+// Buttonless toggles (e.g. the swing-alert opt-in) post their form on change.
+document.addEventListener("change", function (e) {
+  const el = e.target;
+  if (el.matches("[data-autosubmit]") && el.form) {
+    el.form.submit();
+  }
+});

@@ -131,6 +131,14 @@ a { color: inherit; text-decoration: none; }
 .mini.danger:hover { color: var(--neg); border-color: var(--neg); background: var(--coral-soft); }
 .mini.run:hover { color: var(--acid-dark); border-color: var(--acid-dark); }
 
+/* ---- portfolio header actions ---- */
+.head-actions { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; justify-content: flex-end; }
+.swing-toggle { margin: 0; }
+.swing-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); user-select: none; }
+.swing-label:hover { color: var(--ink); }
+.swing-label input[type=checkbox] { accent-color: var(--acid-dark); width: 14px; height: 14px; cursor: pointer; margin: 0; }
+.swing-label.muted, .swing-label.muted input { cursor: default; }
+
 /* ---- add form / weight form ---- */
 .add-form { display: flex; gap: 8px; }
 .add-form input, .weight-input, .edit-weight input { background: #fff; border: 1px solid var(--line-2); color: var(--ink); border-radius: 2px; padding: 9px 12px; font: inherit; font-size: 14px; }

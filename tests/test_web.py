@@ -144,6 +144,33 @@ def test_bad_ticker_add_rejected(seeded, monkeypatch):
     assert "err=" in r.headers["location"]
 
 
+# -- swing-alert opt-in -----------------------------------------------------
+
+def test_swing_alerts_toggle(seeded, monkeypatch):
+    c = client(seeded, monkeypatch)
+    conn = db.connect(seeded.db_path)
+    pid = accounts.resolve_login(conn, "member@thesilofund.com").portfolio_id
+
+    assert c.post("/portfolio/swing-alerts", data={"enabled": "1"}).status_code == 303
+    assert conn.execute(
+        "SELECT swing_alerts_enabled FROM portfolios WHERE id = ?", (pid,)
+    ).fetchone()[0] == 1
+
+    # An unchecked checkbox submits no field -> opts back out.
+    assert c.post("/portfolio/swing-alerts", data={}).status_code == 303
+    assert conn.execute(
+        "SELECT swing_alerts_enabled FROM portfolios WHERE id = ?", (pid,)
+    ).fetchone()[0] == 0
+
+
+def test_swing_alert_flag_round_trips_into_dashboard(seeded, monkeypatch):
+    c = client(seeded, monkeypatch)
+    assert "Email me when a holding moves 10%+ in a day" in c.get("/").text
+    assert "data-autosubmit checked" not in c.get("/").text
+    c.post("/portfolio/swing-alerts", data={"enabled": "1"})
+    assert "data-autosubmit checked" in c.get("/").text
+
+
 # -- job guardrails ---------------------------------------------------------
 
 def test_unknown_job_rejected(seeded, monkeypatch):

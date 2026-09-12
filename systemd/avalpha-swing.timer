@@ -1,0 +1,12 @@
+[Unit]
+Description=avalpha swing alerter timer
+
+[Timer]
+# Every 15 minutes. The market-state gate in the code no-ops outside the
+# regular session (nights, weekends, holidays), so off-hours firings exit fast.
+OnBootSec=300
+OnUnitActiveSec=900
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

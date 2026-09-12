@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _SCHEMA_FILE = Path(__file__).resolve().parent.parent / "schema.sql"
 
 
@@ -196,6 +196,28 @@ def _migrate_v4(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE digests_v3")
 
 
+def _migrate_v5(conn: sqlite3.Connection) -> None:
+    """Schema v5: per-portfolio swing-alert opt-in and its debounce/audit log."""
+    if not _column_exists(conn, "portfolios", "swing_alerts_enabled"):
+        conn.execute(
+            "ALTER TABLE portfolios ADD COLUMN "
+            "swing_alerts_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS swing_alerts_sent (
+            portfolio_id INTEGER NOT NULL REFERENCES portfolios (id),
+            ticker       TEXT NOT NULL,
+            session_date TEXT NOT NULL,     -- Pacific trading date YYYY-MM-DD
+            pct          REAL NOT NULL,
+            price        REAL NOT NULL,
+            sent_at      TEXT NOT NULL,
+            PRIMARY KEY (portfolio_id, ticker, session_date)
+        );
+        """
+    )
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
@@ -221,6 +243,7 @@ _MIGRATIONS: dict[int, "str | object"] = {
     """,
     3: _migrate_v3,
     4: _migrate_v4,
+    5: _migrate_v5,
 }
 
 

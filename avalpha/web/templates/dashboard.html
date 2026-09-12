@@ -44,10 +44,25 @@
 <section class="block">
   <div class="block-head">
     <p class="section-label">Portfolio</p>
-    {% if not read_only %}<form class="add-form" method="post" action="/holding/add{{ view_suffix }}">
-      <input name="ticker" placeholder="Add ticker (e.g. NVDA)" maxlength="6" autocomplete="off" required>
-      <button class="btn btn-gold" type="submit">Add holding</button>
-    </form>{% endif %}
+    <div class="head-actions">
+      {% if not read_only %}
+      <form class="swing-toggle" method="post" action="/portfolio/swing-alerts{{ view_suffix }}">
+        <label class="swing-label">
+          <input type="checkbox" name="enabled" value="1" data-autosubmit {{ 'checked' if swing_alerts_enabled else '' }}>
+          <span>Email me when a holding moves 10%+ in a day</span>
+        </label>
+      </form>
+      <form class="add-form" method="post" action="/holding/add{{ view_suffix }}">
+        <input name="ticker" placeholder="Add ticker (e.g. NVDA)" maxlength="6" autocomplete="off" required>
+        <button class="btn btn-gold" type="submit">Add holding</button>
+      </form>
+      {% else %}
+      <label class="swing-label muted">
+        <input type="checkbox" disabled {{ 'checked' if swing_alerts_enabled else '' }}>
+        <span>Owner is emailed on 10%+ day moves</span>
+      </label>
+      {% endif %}
+    </div>
   </div>
   <div class="table-scroll">
   <table class="grid">

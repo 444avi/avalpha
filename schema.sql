@@ -1,4 +1,4 @@
--- avalpha schema v4. Applied via PRAGMA user_version migrations in db.py.
+-- avalpha schema v5. Applied via PRAGMA user_version migrations in db.py.
 -- All timestamps are UTC ISO-8601 strings ("YYYY-MM-DDTHH:MM:SSZ").
 
 CREATE TABLE users (
@@ -10,9 +10,10 @@ CREATE TABLE users (
 );
 
 CREATE TABLE portfolios (
-    id            INTEGER PRIMARY KEY,
-    owner_user_id INTEGER NOT NULL UNIQUE REFERENCES users (id),
-    name          TEXT NOT NULL
+    id                   INTEGER PRIMARY KEY,
+    owner_user_id        INTEGER NOT NULL UNIQUE REFERENCES users (id),
+    name                 TEXT NOT NULL,
+    swing_alerts_enabled INTEGER NOT NULL DEFAULT 0  -- opt-in: email on ±10% day moves
 );
 
 CREATE TABLE watchlist (
@@ -127,6 +128,20 @@ CREATE TABLE digests (
     sent_at      TEXT,
     pdf_path     TEXT NOT NULL,
     PRIMARY KEY (portfolio_id, date)
+);
+
+-- Swing-alert debounce + audit log. One row per (portfolio, ticker, trading
+-- day) once an alert email has been sent, so a holding that stays ±10% is not
+-- re-emailed every 15 minutes. No direction component: at most one alert per
+-- ticker per day even if a stock reverses through the band.
+CREATE TABLE swing_alerts_sent (
+    portfolio_id INTEGER NOT NULL REFERENCES portfolios (id),
+    ticker       TEXT NOT NULL,
+    session_date TEXT NOT NULL,     -- Pacific trading date YYYY-MM-DD
+    pct          REAL NOT NULL,
+    price        REAL NOT NULL,
+    sent_at      TEXT NOT NULL,
+    PRIMARY KEY (portfolio_id, ticker, session_date)
 );
 
 -- Web console job runs: on-demand collector/matcher/scorer/digest triggers

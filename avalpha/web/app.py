@@ -156,6 +156,7 @@ def create_app(config: Config | None = None) -> FastAPI:
             access,
             holdings=holdings,
             total_weight=queries.total_weight(holdings),
+            swing_alerts_enabled=queries.swing_alerts_enabled(conn, access.portfolio_id),
             health=queries.health(conn) if show_ops else None,
             scores=queries.recent_scores(
                 conn, limit=25, portfolio_id=access.portfolio_id
@@ -318,6 +319,29 @@ def create_app(config: Config | None = None) -> FastAPI:
             access,
             msg=f"Reactivated {ticker}." if ok else None,
             err=None if ok else f"{ticker} not found in this portfolio.",
+        )
+
+    @app.post("/portfolio/swing-alerts")
+    def set_swing_alerts(
+        enabled: str | None = Form(None),
+        conn=Depends(get_conn),
+        access: PortfolioAccess = Depends(selected_access),
+    ):
+        require_writable(access)
+        value = 1 if enabled is not None else 0
+        conn.execute(
+            "UPDATE portfolios SET swing_alerts_enabled = ? WHERE id = ?",
+            (value, access.portfolio_id),
+        )
+        conn.commit()
+        return back(
+            "/",
+            access,
+            msg=(
+                "Swing alerts on — you'll be emailed on 10%+ day moves."
+                if value
+                else "Swing alerts off."
+            ),
         )
 
     @app.post("/jobs/{job_key:path}")

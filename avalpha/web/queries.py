@@ -104,6 +104,14 @@ def total_weight(holdings: list[dict]) -> float:
     return sum(h["weight"] for h in holdings if h["active"])
 
 
+def swing_alerts_enabled(conn: sqlite3.Connection, portfolio_id: int) -> bool:
+    """Whether this portfolio has opted in to ±10% day-move email alerts."""
+    row = conn.execute(
+        "SELECT swing_alerts_enabled FROM portfolios WHERE id = ?", (portfolio_id,)
+    ).fetchone()
+    return bool(row["swing_alerts_enabled"]) if row else False
+
+
 def recent_scores(
     conn: sqlite3.Connection,
     ticker: str | None = None,

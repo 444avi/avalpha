@@ -108,8 +108,15 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now \
   avalpha-edgar.timer avalpha-ir.timer avalpha-gnews.timer \
   avalpha-reddit.timer avalpha-prices.timer avalpha-calendar.timer \
-  avalpha-matcher.timer avalpha-scorer.service avalpha-digest.timer
+  avalpha-matcher.timer avalpha-scorer.service avalpha-digest.timer \
+  avalpha-swing.timer
 ```
+
+The swing alerter (`avalpha-swing.timer`) fires every 15 minutes and emails a
+holder when one of their holdings makes a ±10% day move. It is opt-in per
+portfolio (default off; the checkbox is in the web console's Portfolio header),
+and the market-state gate makes off-hours firings exit immediately, so it is
+safe to enable alongside the others even though most of the day it no-ops.
 
 Timers fire at each source's *fastest* cadence; the market-state due-check in
 the code enforces the spec's cadence table (regular / after-hours / overnight,

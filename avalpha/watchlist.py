@@ -96,6 +96,31 @@ def active(
     return [Holding.from_row(r) for r in rows]
 
 
+def alert_enabled_tickers(conn: sqlite3.Connection) -> list[str]:
+    """Distinct active tickers across portfolios opted in to swing alerts.
+
+    The swing alerter's dedup primitive: one Finnhub poll per unique ticker,
+    scoped to holders who actually want alerts (opted-out portfolios' tickers
+    are never polled)."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT ph.ticker
+        FROM portfolio_holdings ph JOIN portfolios p ON p.id = ph.portfolio_id
+        WHERE ph.active = 1 AND p.swing_alerts_enabled = 1
+        ORDER BY ph.ticker
+        """
+    ).fetchall()
+    return [r["ticker"] for r in rows]
+
+
+def alert_enabled_portfolios(conn: sqlite3.Connection) -> list[int]:
+    """Portfolio ids opted in to swing alerts, for per-owner fan-out."""
+    rows = conn.execute(
+        "SELECT id FROM portfolios WHERE swing_alerts_enabled = 1 ORDER BY id"
+    ).fetchall()
+    return [r["id"] for r in rows]
+
+
 def all_holdings(
     conn: sqlite3.Connection, portfolio_id: int | None = None
 ) -> list[Holding]:

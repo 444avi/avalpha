@@ -209,6 +209,36 @@ def test_manual_events_jobs_and_digest_pdfs_are_isolated(
     ).fetchone()[0] == "Bob only"
 
 
+def test_swing_alert_toggle_is_scoped_to_requesting_portfolio(cfg, users, monkeypatch):
+    alice, bob, _ = users
+    client = _client(cfg, monkeypatch, alice.email)
+    assert client.post(
+        "/portfolio/swing-alerts", data={"enabled": "1"}
+    ).status_code == 303
+    conn = db.connect(cfg.db_path)
+    flags = {
+        row["id"]: row["swing_alerts_enabled"]
+        for row in conn.execute("SELECT id, swing_alerts_enabled FROM portfolios")
+    }
+    assert flags[alice.portfolio_id] == 1
+    assert flags[bob.portfolio_id] == 0  # untouched
+
+
+def test_admin_read_only_view_cannot_toggle_swing_alerts(cfg, users, monkeypatch):
+    alice, bob, avi = users
+    client = _client(cfg, monkeypatch, avi.email)  # admin viewing bob read-only
+    denied = client.post(
+        f"/portfolio/swing-alerts?portfolio_id={bob.portfolio_id}",
+        data={"enabled": "1"},
+        headers={"accept": "text/html"},
+    )
+    assert denied.status_code == 403
+    conn = db.connect(cfg.db_path)
+    assert conn.execute(
+        "SELECT swing_alerts_enabled FROM portfolios WHERE id = ?", (bob.portfolio_id,)
+    ).fetchone()[0] == 0
+
+
 def test_collectors_use_distinct_union_of_active_tickers(cfg, users):
     alice, bob, _ = users
     conn = db.connect(cfg.db_path)
