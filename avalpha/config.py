@@ -18,7 +18,7 @@ class Config:
     model_narrative: str = "claude-sonnet-4-6"
     web_host: str = "127.0.0.1"
     web_port: int = 8000
-    web_fund_name: str = "The Silo Fund"
+    web_fund_name: str = "Avalpha"
 
     @property
     def anthropic_api_key(self) -> str:
@@ -164,5 +164,5 @@ def load_config(path: Path | None = None) -> Config:
         model_narrative=models.get("narrative", "claude-sonnet-4-6"),
         web_host=web.get("host", "127.0.0.1"),
         web_port=int(web.get("port", 8000)),
-        web_fund_name=web.get("fund_name", "The Silo Fund"),
+        web_fund_name=web.get("fund_name", "Avalpha"),
     )

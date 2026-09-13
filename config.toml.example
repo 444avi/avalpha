@@ -15,6 +15,13 @@ recipient = "you@example.com"
 # fallback when SMTP_HOST is empty) -- credentials come from the environment.
 sender = "avalpha <avalpha@arboretuminvestments.net>"
 
+[web]
+# Brand shown in the console header, page titles, and footer. Defaults to
+# "Avalpha" if omitted.
+fund_name = "Avalpha"
+host = "127.0.0.1"
+port = 8000
+
 [reddit]
 subreddits = ["stocks", "investing", "wallstreetbets", "StockMarket", "options"]
 

@@ -8,6 +8,7 @@ from avalpha.calendar_store import Event, earnings_key, macro_key, upsert_event
 from avalpha.config import Config
 from avalpha.db import connect, utcnow
 from avalpha.digest.build import (
+    _digest_date,
     _earnings_in_window,
     _macro_events,
     _price_action,
@@ -63,6 +64,22 @@ def test_window_ignores_unsent_preview_build(tmp_path):
     start, end = _window(conn, now)
     assert start == "2026-08-03T13:00:00Z"  # anchored on the sent digest, not the preview
     assert end == "2026-08-04T13:00:00Z"
+
+
+def test_digest_date_is_calendar_day_not_prior_trading_day():
+    """The digest ships every day, so each calendar day — weekends included —
+    must get a distinct identity/dedup key. Keying on the prior trading day
+    collapsed Fri/Sat/Sun/Mon onto Friday, so only Saturday sent and Monday was
+    silently skipped. 2026-09-11..14 is Fri/Sat/Sun/Mon in Pacific."""
+    at = lambda d: datetime(2026, 9, d, 13, 0, tzinfo=timezone.utc)  # 6am PT
+    dates = [_digest_date(at(d), None) for d in (11, 12, 13, 14)]
+    assert dates == ["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14"]
+    assert len(set(dates)) == 4  # every day is its own digest
+
+
+def test_digest_date_honors_explicit_date():
+    assert _digest_date(datetime(2026, 9, 12, 13, 0, tzinfo=timezone.utc),
+                        "2026-08-03") == "2026-08-03"
 
 
 def test_price_action(tmp_path):

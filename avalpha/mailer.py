@@ -27,7 +27,7 @@ def build_message(
         msg["Reply-To"] = config.reply_to
     msg["Subject"] = f"avalpha digest — {label_date}"
     msg.set_content(
-        f"Morning digest covering {label_date} is attached.\n\n— avalpha\n"
+        f"Your {label_date} morning digest is attached.\n\n— avalpha\n"
     )
     msg.add_attachment(
         pdf_path.read_bytes(),

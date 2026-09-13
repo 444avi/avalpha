@@ -1,9 +1,14 @@
 """Morning digest builder.
 
-Each digest covers everything fetched since the previous digest was built
-(first run: trailing 48h), labeled with the prior trading day. One page per
-active holding plus a cover page. Quiet pages say so explicitly — and cost no
-LLM call.
+Each digest covers everything fetched since the previous digest was *sent*
+(first run: trailing 48h), labeled with the calendar day it is built. One page
+per active holding plus a cover page. Quiet pages say so explicitly — and cost
+no LLM call.
+
+The digest runs every day, weekends included: market-moving news (filings, IR,
+macro) lands on Saturdays and Sundays too, and each day gets its own edition.
+That is why the identity/dedup key is the calendar day rather than the prior
+trading day — see ``_digest_date``.
 """
 
 import json
@@ -16,17 +21,17 @@ from jinja2 import Environment, FileSystemLoader
 from avalpha import watchlist
 from avalpha.config import Config
 from avalpha.db import utcnow
-from avalpha.market_state import PACIFIC, prior_trading_day
+from avalpha.market_state import PACIFIC
 from avalpha.scorer import PROMPT_VERSION
 
 MAX_ITEMS_PER_PAGE = 8
 
 NARRATIVE_PROMPT = """\
 You write the "what mattered" section of a morning portfolio digest page for
-{ticker} ({legal_name}), covering the previous trading day. Below are the
-scored items. Write 2-3 plain sentences on what actually mattered and why it
-could move the stock. No preamble, no bullet points, no hedging boilerplate.
-If the items are all minor, say so plainly in one sentence.
+{ticker} ({legal_name}), covering news since the last digest (which may span a
+weekend). Below are the scored items. Write 2-3 plain sentences on what actually
+mattered and why it could move the stock. No preamble, no bullet points, no
+hedging boilerplate. If the items are all minor, say so plainly in one sentence.
 
 Items:
 {items}
@@ -34,9 +39,9 @@ Items:
 
 COVER_PROMPT = """\
 You write the cover page of a morning portfolio digest. Below are per-holding
-summaries of the previous trading day. Write 3-5 sentences on portfolio-level
-themes and anything spanning multiple holdings. Mention only what is supported
-by the items below. No preamble, no bullet points.
+summaries covering news since the last digest (which may span a weekend). Write
+3-5 sentences on portfolio-level themes and anything spanning multiple holdings.
+Mention only what is supported by the items below. No preamble, no bullet points.
 
 {sections}
 """
@@ -270,6 +275,24 @@ def _llm_text(config: Config, prompt: str, max_tokens: int = 512) -> str:
     return "".join(b.text for b in response.content if b.type == "text").strip()
 
 
+def _digest_date(now: datetime, date_str: str | None) -> str:
+    """Identity date for a digest: the Pacific calendar day it is built.
+
+    This is both the dedup key (one digest per portfolio per day) and the label.
+    It is deliberately the *calendar* day, not the prior trading day: the digest
+    ships every day, and weekends carry market-moving news worth analyzing, so
+    Saturday and Sunday each earn their own edition. Keying on the prior trading
+    day instead collapsed Sat/Sun/Mon onto the same Friday key, so only the
+    first weekend run sent and Monday's digest was silently deduped away. An
+    explicit ``date_str`` (manual/backfill builds) is honored as-is.
+
+    Price action still reflects the last completed session regardless of which
+    calendar day this is: ``_price_action`` selects the most recent close at or
+    before this date, and today's close is not in the book at send time.
+    """
+    return date_str or now.astimezone(PACIFIC).date().isoformat()
+
+
 def build_digest(
     config: Config,
     conn: sqlite3.Connection,
@@ -281,7 +304,7 @@ def build_digest(
 
         portfolio_id = default_portfolio_id(conn)
     now = datetime.now(timezone.utc)
-    label_date = date_str or prior_trading_day(now.astimezone(PACIFIC).date()).isoformat()
+    label_date = _digest_date(now, date_str)
     start, end = _window(conn, now, portfolio_id)
 
     holdings_data = []
@@ -427,7 +450,7 @@ def _build_and_send_one(
     from avalpha.accounts import portfolio_owner_email
 
     now = datetime.now(timezone.utc)
-    label_date = date_str or prior_trading_day(now.astimezone(PACIFIC).date()).isoformat()
+    label_date = _digest_date(now, date_str)
     already = conn.execute(
         "SELECT sent_at FROM digests WHERE portfolio_id = ? AND date = ? "
         "AND sent_at IS NOT NULL",
