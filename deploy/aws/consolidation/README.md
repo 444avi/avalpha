@@ -149,6 +149,22 @@ units for apps whose source lives elsewhere — and installs with the same
 For rollback, AVAlpha now has **nine** timers, not eight: stop
 `avalpha-swing.timer` together with the others in the Rollback step above.
 
+### 2026-09-12 — AVAlpha now deploys by `git pull`
+
+`/opt/avalpha` was a plain file copy from the Sep 11 cutover with no `.git`, so
+the first `git pull` deploy failed. It has since been adopted as a git checkout
+tracking the public repo `github.com/444avi/avalpha` — `git init` +
+`git fetch origin main` + `git reset --hard origin/main`, which rewrites only
+tracked files and leaves the untracked/gitignored `config.toml`, `.env`,
+`.venv`, and `/data` untouched. The venv is an editable install, so updated
+modules load without reinstall.
+
+Subsequent AVAlpha deploys are therefore: `sudo -u avalpha git -C /opt/avalpha
+pull origin main`, copy any new or changed unit files into
+`/etc/systemd/system/`, `systemctl daemon-reload`, restart the affected
+services, and `enable --now` any new timer. The cutover moved the files but not
+the git checkout; this note closes that gap so it is not rediscovered.
+
 ## Cost comparison
 
 The estimate uses 730 hours/month, Linux on-demand `us-west-1` T4g rates
