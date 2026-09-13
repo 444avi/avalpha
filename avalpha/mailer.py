@@ -57,9 +57,13 @@ def send_digest_email(
 
 
 def _send(config: Config, msg: EmailMessage) -> None:
-    """Send a prepared message over the configured backend: Mailtrap SMTP when
-    ``SMTP_HOST`` is set, otherwise Amazon SES via the instance role. Recipients
-    are taken from the message's ``To`` header."""
+    """Send a prepared message over the configured backend.
+
+    Mailtrap SMTP when ``SMTP_HOST`` is set. Amazon SES only when it is
+    explicitly enabled (``AVALPHA_ALLOW_SES=1``) — with neither configured we
+    raise rather than silently falling back to SES, so a host that lost its
+    ``SMTP_HOST`` fails loudly instead of quietly mis-delivering through SES (as
+    happened after the 2026-09-11 consolidation). Recipients come from ``To``."""
     if config.smtp_host:
         import smtplib
 
@@ -68,18 +72,26 @@ def _send(config: Config, msg: EmailMessage) -> None:
             if config.smtp_user:
                 smtp.login(config.smtp_user, config.smtp_password)
             smtp.send_message(msg)
-    else:
-        import boto3
+        return
 
-        client = boto3.client("sesv2", region_name=config.aws_region)
-        kwargs = dict(
-            FromEmailAddress=config.email_sender,
-            Destination={"ToAddresses": [msg["To"]]},
-            Content={"Raw": {"Data": msg.as_bytes()}},
+    if not config.allow_ses:
+        raise RuntimeError(
+            "no email backend configured: SMTP_HOST is unset and the SES "
+            "fallback is disabled. Set SMTP_HOST (Mailtrap), or AVALPHA_ALLOW_SES=1 "
+            "to opt into Amazon SES."
         )
-        if config.ses_configuration_set:
-            kwargs["ConfigurationSetName"] = config.ses_configuration_set
-        client.send_email(**kwargs)
+
+    import boto3
+
+    client = boto3.client("sesv2", region_name=config.aws_region)
+    kwargs = dict(
+        FromEmailAddress=config.email_sender,
+        Destination={"ToAddresses": [msg["To"]]},
+        Content={"Raw": {"Data": msg.as_bytes()}},
+    )
+    if config.ses_configuration_set:
+        kwargs["ConfigurationSetName"] = config.ses_configuration_set
+    client.send_email(**kwargs)
 
 
 def build_swing_message(

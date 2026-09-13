@@ -1,5 +1,9 @@
+from email.message import EmailMessage
+
+import pytest
+
 from avalpha.config import Config
-from avalpha.mailer import build_message, build_swing_message
+from avalpha.mailer import _send, build_message, build_swing_message
 
 
 def _config(sender="avalpha <you@example.com>") -> Config:
@@ -51,3 +55,14 @@ def test_build_swing_message_multiple_breaches():
     body = msg.get_content()
     assert "NVDA" in body and "-11.4%" in body
     assert "AAPL" in body and "+10.2%" in body  # gains carry an explicit +
+
+
+def test_send_refuses_silent_ses_fallback(monkeypatch):
+    """With no SMTP_HOST and SES not explicitly enabled, _send raises rather
+    than quietly mis-delivering through SES (the 2026-09-11 regression)."""
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("AVALPHA_ALLOW_SES", raising=False)
+    msg = EmailMessage()
+    msg["To"] = "holder@example.com"
+    with pytest.raises(RuntimeError, match="no email backend"):
+        _send(_config(), msg)

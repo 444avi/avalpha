@@ -391,14 +391,30 @@ def build_and_send(
     date_str: str | None = None,
     portfolio_id: int | None = None,
 ) -> None:
-    """Build and send one portfolio, or every portfolio for the timer job."""
+    """Build and send one portfolio, or every portfolio for the timer job.
+
+    Each portfolio is sent independently: a failure (e.g. a rejected recipient)
+    is logged and does not stop the others — one bad address must not silently
+    skip everyone queued after it. That portfolio's ``sent_at`` stays NULL so it
+    retries next cycle, and the run still raises at the end so the timer reports
+    failure rather than exiting clean on a partial send."""
     portfolio_ids = (
         [portfolio_id]
         if portfolio_id is not None
         else [r["id"] for r in conn.execute("SELECT id FROM portfolios ORDER BY id")]
     )
+    failures = []
     for selected_id in portfolio_ids:
-        _build_and_send_one(config, conn, selected_id, date_str)
+        try:
+            _build_and_send_one(config, conn, selected_id, date_str)
+        except Exception as e:  # isolate one portfolio's failure from the rest
+            failures.append((selected_id, e))
+            print(f"digest FAILED for portfolio {selected_id}: {type(e).__name__}: {e}")
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} of {len(portfolio_ids)} portfolio digests failed: "
+            + ", ".join(f"p{pid} ({type(e).__name__})" for pid, e in failures)
+        )
 
 
 def _build_and_send_one(

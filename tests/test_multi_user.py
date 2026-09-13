@@ -288,6 +288,49 @@ def test_digest_timer_targets_each_portfolio_owner(cfg, users, monkeypatch):
     assert {directory for _, directory in sent} == owner_ids
 
 
+def test_digest_send_is_isolated_per_portfolio(cfg, users, monkeypatch, tmp_path):
+    """One rejected recipient must not skip the other portfolios' digests."""
+    from avalpha import mailer
+    from avalpha.digest import build as digest_build
+
+    conn = db.connect(cfg.db_path)
+    sent = []
+
+    def fake_build(config, db_conn, date_str=None, portfolio_id=None):
+        path = tmp_path / f"{portfolio_id}.pdf"
+        path.write_bytes(b"%PDF")
+        db_conn.execute(
+            "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) VALUES (?, ?, ?, ?)",
+            (portfolio_id, date_str, db.utcnow(), str(path)),
+        )
+        db_conn.commit()
+        return path
+
+    def fake_send(config, path, date_str, recipient=None):
+        if recipient == "bob@example.com":
+            raise RuntimeError("MessageRejected: not verified")
+        sent.append(recipient)
+
+    monkeypatch.setattr(digest_build, "build_digest", fake_build)
+    monkeypatch.setattr(mailer, "send_digest_email", fake_send)
+
+    with pytest.raises(RuntimeError, match="portfolio digests failed"):
+        digest_build.build_and_send(cfg, conn, date_str="2026-12-17")
+
+    # Alice and Avi still delivered despite Bob's failure.
+    assert set(sent) == {"alice@example.com", accounts.ADMIN_EMAIL}
+    rows = {
+        r["portfolio_id"]: r["sent_at"]
+        for r in conn.execute(
+            "SELECT portfolio_id, sent_at FROM digests WHERE date = '2026-12-17'"
+        )
+    }
+    bob = next(u for u in users if u.email == "bob@example.com")
+    assert rows[bob.portfolio_id] is None  # unsent -> retries next cycle
+    others = [pid for pid in rows if pid != bob.portfolio_id]
+    assert all(rows[pid] is not None for pid in others)
+
+
 def test_v3_migration_assigns_shared_data_only_to_avi(tmp_path):
     path = tmp_path / "v3.db"
     conn = sqlite3.connect(path)

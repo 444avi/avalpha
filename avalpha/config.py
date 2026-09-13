@@ -54,6 +54,17 @@ class Config:
         return os.environ.get("SES_CONFIGURATION_SET", "arboretum-notifications").strip()
 
     @property
+    def allow_ses(self) -> bool:
+        """Opt into the Amazon SES backend. Off by default: without SMTP_HOST the
+        mailer raises rather than silently using SES, which once mis-delivered a
+        week of digests on a host missing its Mailtrap config."""
+        return os.environ.get("AVALPHA_ALLOW_SES", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+
+    @property
     def reply_to(self) -> str:
         return os.environ.get("EMAIL_REPLY_TO", "").strip() or "avi@arboretuminvestments.net"
 
