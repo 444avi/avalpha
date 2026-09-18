@@ -63,23 +63,63 @@ Releases:
 
 
 def _window(
-    conn: sqlite3.Connection, now: datetime, portfolio_id: int | None = None
+    conn: sqlite3.Connection,
+    now: datetime,
+    portfolio_id: int | None = None,
+    label_date: str | None = None,
 ) -> tuple[str, str]:
     if portfolio_id is None:
         from avalpha.accounts import default_portfolio_id
 
         portfolio_id = default_portfolio_id(conn)
-    # Anchor on the last *sent* digest, not merely the last built one. built_at
-    # is advanced by every build_digest call, including unsent preview rebuilds
-    # (the web-console "digest" job, `avalpha build-digest`). Anchoring on any
-    # build would let a preview that lands mid-morning shrink the real send's
-    # window to minutes, silently dropping scored items and macro releases that
-    # fell before it. Only a sent digest actually delivered content, so it is the
-    # correct high-water mark for "what has this portfolio already covered".
+    # Anchor on the last *sent* digest from an *earlier* edition (date < today's
+    # label). Two independent reasons, each learned from a real dropped section:
+    #
+    #   * *sent*, not merely built: built_at is advanced by every build_digest
+    #     call, including unsent preview rebuilds (the web-console "digest" job,
+    #     `avalpha build-digest`). Anchoring on any build let a mid-morning
+    #     preview shrink the real send's window to minutes, dropping scored items
+    #     and macro releases that fell before it.
+    #   * an *earlier* edition (date < label_date): once today's digest is sent it
+    #     would otherwise become its own anchor, so any rebuild of today — the
+    #     console "digest" button, a manual re-run — recomputed a near-empty
+    #     window and silently dropped the whole "what happened — macro" section
+    #     from the regenerated PDF (which overwrites the delivered one on disk).
+    #     Excluding today's own edition makes a rebuild idempotent: it reproduces
+    #     the window the send actually used, macro and all.
+    #
+    # Only a sent, earlier digest is the true high-water mark for "what has this
+    # portfolio already covered". label_date is None only in low-level unit tests.
     row = conn.execute(
-        "SELECT built_at FROM digests WHERE portfolio_id = ? "
-        "AND sent_at IS NOT NULL ORDER BY built_at DESC LIMIT 1",
-        (portfolio_id,),
+        "SELECT built_at FROM digests WHERE portfolio_id = ? AND sent_at IS NOT NULL "
+        "AND (? IS NULL OR date < ?) ORDER BY date DESC, built_at DESC LIMIT 1",
+        (portfolio_id, label_date, label_date),
+    ).fetchone()
+    if row:
+        start = row["built_at"]
+    else:
+        start = (now - timedelta(hours=48)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return start, now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _macro_window(
+    conn: sqlite3.Connection, now: datetime, label_date: str | None
+) -> tuple[str, str]:
+    """Fund-wide window for the *macro* block — deliberately not per-portfolio.
+
+    Macro releases are market-wide: every recipient should see the same figures
+    in the same edition. Anchoring macro on each portfolio's own last-sent digest
+    (as the holdings window in ``_window`` must, to catch each member up on their
+    own news) made macro coverage depend on that one portfolio's send timing — so
+    one member got the FOMC print and another didn't, edition after edition. This
+    anchors instead on the most recent *sent* edition across the whole fund
+    (date < label_date), so the macro window is identical for everyone in a run
+    and a rebuild reproduces it. First run ever: trailing 48h.
+    """
+    row = conn.execute(
+        "SELECT built_at FROM digests WHERE sent_at IS NOT NULL "
+        "AND (? IS NULL OR date < ?) ORDER BY date DESC, built_at DESC LIMIT 1",
+        (label_date, label_date),
     ).fetchone()
     if row:
         start = row["built_at"]
@@ -212,9 +252,11 @@ def _macro_events(config: Config, conn: sqlite3.Connection, start: str, end: str
 
     out = []
     for r in rows:
-        outcome = calendar_outcomes.macro_outcome(r["kind"], fred_key)
+        # Pass event_date so macro_outcome can suppress a line whose FRED data has
+        # not caught up to the release yet (else we'd print the prior period).
+        outcome = calendar_outcomes.macro_outcome(r["kind"], fred_key, r["event_date"])
         if not outcome:
-            continue  # data short or fetch failed — omit rather than show a blank
+            continue  # data short, stale, or fetch failed — omit rather than mislead
         consensus = calendar_outcomes.macro_consensus(r["kind"], r["event_date"], config)
         cons_str = None
         if consensus:
@@ -222,6 +264,18 @@ def _macro_events(config: Config, conn: sqlite3.Connection, start: str, end: str
             cons_str = f"vs est {consensus['estimate']} — {verdict}"
         out.append({"label": outcome["label"], "lines": outcome["lines"], "consensus": cons_str})
     return out
+
+
+def _macro_block(
+    config: Config, conn: sqlite3.Connection, now: datetime, label_date: str | None
+) -> list[dict]:
+    """The shared macro figures for one digest run: computed once over the
+    fund-wide window (``_macro_window``) and handed to every portfolio's build.
+    Every recipient then renders the same releases, and FRED is queried once per
+    run rather than once per portfolio — which also means a transient FRED error
+    no longer drops the macro section for just the subset of members built after
+    it. Returns ``[]`` when nothing released (or no FRED key), same as before."""
+    return _macro_events(config, conn, *_macro_window(conn, now, label_date))
 
 
 def _earnings_in_window(config: Config, conn, ticker: str, start: str, end: str) -> dict | None:
@@ -275,6 +329,22 @@ def _llm_text(config: Config, prompt: str, max_tokens: int = 512) -> str:
     return "".join(b.text for b in response.content if b.type == "text").strip()
 
 
+def _llm_text_safe(
+    config: Config, prompt: str, *, fallback: str, label: str, max_tokens: int = 512
+) -> str:
+    """``_llm_text`` that returns ``fallback`` instead of raising. One section's
+    LLM error — a holding narrative, the cover blurb, the macro analysis — must
+    not sink the whole digest and deliver nothing; every other section (and every
+    other recipient) still ships. Callers pass a non-empty ``fallback`` wherever
+    an empty string would change the page's meaning: a build *with* items keeps a
+    non-empty narrative so the template never falls back to its "quiet day" line."""
+    try:
+        return _llm_text(config, prompt, max_tokens=max_tokens)
+    except Exception as e:  # noqa: BLE001 — degrade this section, deliver the rest
+        print(f"digest LLM call failed ({label}): {type(e).__name__}: {e}")
+        return fallback
+
+
 def _digest_date(now: datetime, date_str: str | None) -> str:
     """Identity date for a digest: the Pacific calendar day it is built.
 
@@ -298,14 +368,19 @@ def build_digest(
     conn: sqlite3.Connection,
     date_str: str | None = None,
     portfolio_id: int | None = None,
+    macro: list[dict] | None = None,
 ) -> Path:
+    # `macro` is the shared, fund-wide macro block computed once per run (see
+    # _macro_block). The batch callers (build_and_send, build_all_digests) pass it
+    # so every recipient renders identical releases; a standalone build (the CLI,
+    # a single-portfolio rebuild) leaves it None and computes its own.
     if portfolio_id is None:
         from avalpha.accounts import default_portfolio_id
 
         portfolio_id = default_portfolio_id(conn)
     now = datetime.now(timezone.utc)
     label_date = _digest_date(now, date_str)
-    start, end = _window(conn, now, portfolio_id)
+    start, end = _window(conn, now, portfolio_id, label_date)
 
     holdings_data = []
     for h in watchlist.active(conn, portfolio_id):
@@ -322,11 +397,13 @@ def build_digest(
                 f"(mechanism: {it['mechanism']})"
                 for it in items
             )
-            narrative = _llm_text(
+            narrative = _llm_text_safe(
                 config,
                 NARRATIVE_PROMPT.format(
                     ticker=h.ticker, legal_name=h.legal_name, items=listing
                 ),
+                fallback="Automated summary unavailable this edition — see the items below.",
+                label=f"narrative {h.ticker}",
             )
 
         direction = "flat"
@@ -353,13 +430,18 @@ def build_digest(
         f"{d['ticker']}: {d['narrative']}" for d in holdings_data if d["narrative"]
     ]
     if active_sections:
-        cover_text = _llm_text(
-            config, COVER_PROMPT.format(sections="\n".join(active_sections))
+        cover_text = _llm_text_safe(
+            config,
+            COVER_PROMPT.format(sections="\n".join(active_sections)),
+            fallback="Automated portfolio summary unavailable this edition — see the per-holding pages.",
+            label="cover",
         )
     else:
         cover_text = "Quiet day across the portfolio — nothing material at any holding."
 
-    macro_events = _macro_events(config, conn, start, end)
+    macro_events = (
+        macro if macro is not None else _macro_block(config, conn, now, label_date)
+    )
     macro_analysis = ""
     if macro_events:
         releases = "\n".join(
@@ -370,9 +452,16 @@ def build_digest(
         holdings_str = (
             ", ".join(f"{d['ticker']} ({d['name']})" for d in holdings_data) or "none active"
         )
-        macro_analysis = _llm_text(
+        # Best-effort: if the narrative LLM call fails, still ship the digest with
+        # the released figures (the macro_events list renders on its own) rather
+        # than raising and delivering no digest at all. For an empty-holdings
+        # member this is the only LLM call in the build, so this keeps their
+        # digest going out even during an Anthropic hiccup.
+        macro_analysis = _llm_text_safe(
             config,
             MACRO_ANALYSIS_PROMPT.format(holdings=holdings_str, releases=releases),
+            fallback="",
+            label=f"macro analysis p{portfolio_id}",
         )
 
     env = Environment(
@@ -397,12 +486,20 @@ def build_digest(
 
     HTML(string=html).write_pdf(pdf_path)
 
+    # Record built_at = end (the window's right edge, captured at build start),
+    # not utcnow() at build end. This stored value is the *next* digest's window
+    # left edge, so it must equal the boundary this digest actually covered; the
+    # LLM + PDF work between the two instants would otherwise be an interval no
+    # digest covers, and a macro release timestamped there would silently vanish.
+    # Once a digest is sent, freeze its built_at and pdf_path (WHERE sent_at IS
+    # NULL) so a later preview rebuild can neither move the high-water mark nor
+    # repoint the row away from the PDF that was actually delivered.
     conn.execute(
         "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) "
         "VALUES (?, ?, ?, ?) "
         "ON CONFLICT (portfolio_id, date) DO UPDATE SET built_at = excluded.built_at, "
-        "pdf_path = excluded.pdf_path",
-        (portfolio_id, label_date, utcnow(), str(pdf_path)),
+        "pdf_path = excluded.pdf_path WHERE digests.sent_at IS NULL",
+        (portfolio_id, label_date, end, str(pdf_path)),
     )
     conn.commit()
     return pdf_path
@@ -426,10 +523,15 @@ def build_and_send(
         if portfolio_id is not None
         else [r["id"] for r in conn.execute("SELECT id FROM portfolios ORDER BY id")]
     )
+    # Compute the market-wide macro block once and hand the same figures to every
+    # portfolio, so all recipients get identical macro analysis in this edition
+    # (and FRED is hit once for the run, not once per portfolio).
+    now = datetime.now(timezone.utc)
+    macro = _macro_block(config, conn, now, _digest_date(now, date_str))
     failures = []
     for selected_id in portfolio_ids:
         try:
-            _build_and_send_one(config, conn, selected_id, date_str)
+            _build_and_send_one(config, conn, selected_id, date_str, macro)
         except Exception as e:  # isolate one portfolio's failure from the rest
             failures.append((selected_id, e))
             print(f"digest FAILED for portfolio {selected_id}: {type(e).__name__}: {e}")
@@ -445,6 +547,7 @@ def _build_and_send_one(
     conn: sqlite3.Connection,
     portfolio_id: int,
     date_str: str | None,
+    macro: list[dict] | None = None,
 ) -> None:
     from avalpha.mailer import send_digest_email
     from avalpha.accounts import portfolio_owner_email
@@ -464,7 +567,7 @@ def _build_and_send_one(
     if not recipient:
         raise RuntimeError(f"portfolio {portfolio_id} has no owner")
     pdf_path = build_digest(
-        config, conn, date_str=label_date, portfolio_id=portfolio_id
+        config, conn, date_str=label_date, portfolio_id=portfolio_id, macro=macro
     )
     send_digest_email(config, pdf_path, label_date, recipient=recipient)
     conn.execute(
@@ -478,8 +581,11 @@ def _build_and_send_one(
 def build_all_digests(
     config: Config, conn: sqlite3.Connection, date_str: str | None = None
 ) -> list[Path]:
-    """Build independent content and PDFs for every provisioned portfolio."""
+    """Build independent content and PDFs for every provisioned portfolio, all
+    sharing one fund-wide macro block so the preview matches what is delivered."""
+    now = datetime.now(timezone.utc)
+    macro = _macro_block(config, conn, now, _digest_date(now, date_str))
     return [
-        build_digest(config, conn, date_str=date_str, portfolio_id=row["id"])
+        build_digest(config, conn, date_str=date_str, portfolio_id=row["id"], macro=macro)
         for row in conn.execute("SELECT id FROM portfolios ORDER BY id")
     ]
