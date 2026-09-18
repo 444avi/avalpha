@@ -26,6 +26,9 @@ Every fetch is best-effort: any failure returns None and the digest simply omits
 that line rather than failing to build.
 """
 
+import time
+from datetime import date, timedelta
+
 import requests
 
 from avalpha.calendar_store import KIND_LABELS
@@ -62,28 +65,52 @@ FMP_EVENT_KEYS = {
 # -- FRED fetch + math ------------------------------------------------------
 
 
+FRED_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+FRED_MAX_ATTEMPTS = 3
+
+
 def _fred_series(series: str, key: str, limit: int = 15) -> list[tuple[str, float | None]]:
     """Latest `limit` observations for `series`, newest first. Non-numeric FRED
-    values (the "." placeholder) come back as None for the caller to skip."""
-    resp = requests.get(
-        FRED_OBS_URL,
-        params={
-            "series_id": series,
-            "api_key": key,
-            "file_type": "json",
-            "sort_order": "desc",
-            "limit": limit,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    out: list[tuple[str, float | None]] = []
-    for o in resp.json().get("observations", []):
+    values (the "." placeholder) come back as None for the caller to skip.
+
+    Retries a few times on a *transient* failure — a network error/timeout or a
+    429/5xx from FRED. The digest builds minutes after the 08:30 ET releases, when
+    FRED is under load, and a single blip used to drop the whole macro section for
+    the edition. A non-429 4xx (bad key, unknown series) is not retried: retrying
+    can't fix it, and the caller (macro_outcome) omits that line either way."""
+    last_exc: Exception | None = None
+    for attempt in range(FRED_MAX_ATTEMPTS):
+        if attempt:
+            time.sleep(0.5 * 2 ** (attempt - 1))  # 0.5s, then 1.0s
         try:
-            out.append((o["date"], float(o["value"])))
-        except (TypeError, ValueError, KeyError):
-            out.append((o.get("date", ""), None))
-    return out
+            resp = requests.get(
+                FRED_OBS_URL,
+                params={
+                    "series_id": series,
+                    "api_key": key,
+                    "file_type": "json",
+                    "sort_order": "desc",
+                    "limit": limit,
+                },
+                timeout=30,
+            )
+            if resp.status_code in FRED_RETRY_STATUS:
+                last_exc = RuntimeError(f"FRED {resp.status_code} for {series}")
+                continue
+            resp.raise_for_status()  # non-retryable 4xx -> HTTPError, propagated below
+        except requests.HTTPError:
+            raise
+        except requests.RequestException as e:  # connection reset, timeout, DNS…
+            last_exc = e
+            continue
+        out: list[tuple[str, float | None]] = []
+        for o in resp.json().get("observations", []):
+            try:
+                out.append((o["date"], float(o["value"])))
+            except (TypeError, ValueError, KeyError):
+                out.append((o.get("date", ""), None))
+        return out
+    raise last_exc if last_exc else RuntimeError(f"FRED fetch failed for {series}")
 
 
 def _pct_change(cur: float | None, prev: float | None) -> float | None:
@@ -180,10 +207,47 @@ def _fed_range_lines(cfg: dict, key: str) -> list[str] | None:
     return [f"Fed funds target {verb} {abs(delta_bps):.0f} bps to {rng}{tail}"]
 
 
-def macro_outcome(kind: str, key: str) -> dict | None:
+# Freshness gate. On a release morning FRED can lag the print, so its newest
+# observation may still be the *prior* period; reporting that as the new release
+# is worse than omitting it. The gate compares the newest observation's *date* to
+# the release date, so it only applies to shapes where a release adds a new dated
+# observation: the monthly prints (a new month each time) and the daily fed-funds
+# target (carries the new value on the decision day). GDP is deliberately absent —
+# its advance/second/third estimates reuse the same quarter-start observation
+# date, so a date gap can't tell a revision from staleness; it stays ungated
+# (quarterly, reliably in FRED by build time). Each max-lag clears a fresh print
+# but not a whole cycle of staleness.
+FRESH_MAX_LAG_DAYS = {"index": 55, "jobs": 55, "fed_range": 7}
+# Which series in each gated shape's cfg dates the release.
+_FRESH_SERIES = {"index": "headline", "jobs": "payrolls", "fed_range": "upper"}
+
+
+def _fresh_enough(cfg: dict, key: str, event_date: str) -> bool:
+    """True if FRED's newest observation for `cfg` is recent enough to be the
+    figure released on `event_date`, rather than a not-yet-updated prior period.
+    Shapes not in ``FRESH_MAX_LAG_DAYS`` (e.g. GDP) are never gated. On any
+    ambiguity — no series mapped, no data, an unparseable date — return True, so
+    this guard can only *suppress a demonstrably stale* line and never swallows a
+    real release on a transient hiccup."""
+    max_lag = FRESH_MAX_LAG_DAYS.get(cfg["shape"])
+    field = _FRESH_SERIES.get(cfg["shape"])
+    series = cfg.get(field) if field else None
+    if max_lag is None or not series:
+        return True
+    try:
+        newest = date.fromisoformat(_fred_series(series, key, 1)[0][0])
+        release = date.fromisoformat(event_date)
+    except (IndexError, TypeError, ValueError):
+        return True
+    return newest >= release - timedelta(days=max_lag)
+
+
+def macro_outcome(kind: str, key: str, event_date: str | None = None) -> dict | None:
     """Released figures for a Tier-A macro `kind` from FRED, or None if the kind
-    isn't mapped, the data is short, or the fetch fails. Returns
-    ``{"kind", "label", "lines"}`` where ``lines`` are ready-to-render strings."""
+    isn't mapped, the data is short, the fetch fails, or — when `event_date` is
+    given — FRED has not yet published the observation for that release (better to
+    omit the line than to report the prior period's figure as the new print).
+    Returns ``{"kind", "label", "lines"}``; ``lines`` are ready-to-render strings."""
     cfg = MACRO_SERIES.get(kind)
     if cfg is None:
         return None
@@ -198,6 +262,8 @@ def macro_outcome(kind: str, key: str) -> dict | None:
     except Exception:  # noqa: BLE001 — best-effort: a bad fetch omits the block
         return None
     if not lines:
+        return None
+    if event_date and not _fresh_enough(cfg, key, event_date):
         return None
     return {"kind": kind, "label": KIND_LABELS.get(kind, kind), "lines": lines}
 

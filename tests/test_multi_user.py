@@ -256,7 +256,7 @@ def test_digest_timer_targets_each_portfolio_owner(cfg, users, monkeypatch):
     conn = db.connect(cfg.db_path)
     sent = []
 
-    def fake_build(config, db_conn, date_str=None, portfolio_id=None):
+    def fake_build(config, db_conn, date_str=None, portfolio_id=None, macro=None):
         path = config.digest_dir / str(portfolio_id) / f"avalpha-{date_str}.pdf"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"%PDF")
@@ -296,7 +296,7 @@ def test_digest_send_is_isolated_per_portfolio(cfg, users, monkeypatch, tmp_path
     conn = db.connect(cfg.db_path)
     sent = []
 
-    def fake_build(config, db_conn, date_str=None, portfolio_id=None):
+    def fake_build(config, db_conn, date_str=None, portfolio_id=None, macro=None):
         path = tmp_path / f"{portfolio_id}.pdf"
         path.write_bytes(b"%PDF")
         db_conn.execute(

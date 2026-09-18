@@ -3,6 +3,8 @@
 FRED/Finnhub/FMP are stubbed — the point is the shaping math (YoY/MoM, payroll
 deltas, the fed-funds step, surprise), not the network."""
 
+import pytest
+
 from avalpha import calendar_outcomes as co
 from avalpha.config import Config
 
@@ -24,6 +26,10 @@ class _Resp:
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise co.requests.HTTPError(str(self.status_code))
 
 
 # -- macro: price indexes (CPI/PCE/PPI) -------------------------------------
@@ -102,6 +108,81 @@ def test_gdp_outcome(monkeypatch):
 
 def test_unmapped_kind_returns_none():
     assert co.macro_outcome("beige_book", "key") is None
+
+
+# -- FRED transient-failure retry -------------------------------------------
+
+
+def test_fred_series_retries_transient_5xx_then_succeeds(monkeypatch):
+    """A single 503 (FRED under load right after an 08:30 release) must not drop
+    the series — retry and succeed rather than let the whole macro block vanish."""
+    calls = []
+    good = _Resp(200, {"observations": [{"date": "2026-09-01", "value": "3.1"}]})
+
+    def flaky(*a, **k):
+        calls.append(1)
+        return _Resp(503, {}) if len(calls) == 1 else good
+
+    monkeypatch.setattr(co.requests, "get", flaky)
+    monkeypatch.setattr(co.time, "sleep", lambda *_: None)
+    assert co._fred_series("CPIAUCSL", "key") == [("2026-09-01", 3.1)]
+    assert len(calls) == 2  # retried once after the 503
+
+
+def test_fred_series_does_not_retry_client_error(monkeypatch):
+    """A 4xx (bad key/unknown series) can't be fixed by retrying — fail fast."""
+    calls = []
+    monkeypatch.setattr(co.requests, "get", lambda *a, **k: calls.append(1) or _Resp(400, {}))
+    monkeypatch.setattr(co.time, "sleep", lambda *_: None)
+    with pytest.raises(co.requests.HTTPError):
+        co._fred_series("BADSERIES", "key")
+    assert len(calls) == 1
+
+
+def test_fred_series_gives_up_after_max_attempts(monkeypatch):
+    calls = []
+    monkeypatch.setattr(co.requests, "get", lambda *a, **k: calls.append(1) or _Resp(503, {}))
+    monkeypatch.setattr(co.time, "sleep", lambda *_: None)
+    with pytest.raises(Exception):
+        co._fred_series("X", "key")
+    assert len(calls) == co.FRED_MAX_ATTEMPTS
+
+
+# -- freshness gate (omit a not-yet-updated release) ------------------------
+
+
+def test_macro_outcome_omits_stale_release(monkeypatch):
+    """On decision day, if FRED's target series still shows a weeks-old value, omit
+    the FOMC line rather than report the pre-decision range as the new print."""
+    data = {"DFEDTARU": [("2026-08-20", 3.75), ("2026-08-19", 3.75)],
+            "DFEDTARL": [("2026-08-20", 3.50), ("2026-08-19", 3.50)]}
+    monkeypatch.setattr(co, "_fred_series", lambda s, k, limit=15: data[s])
+    assert co.macro_outcome("fomc", "key", event_date="2026-09-16") is None
+
+
+def test_macro_outcome_shows_fresh_release(monkeypatch):
+    data = {"DFEDTARU": [("2026-09-16", 3.75), ("2026-09-15", 3.75)],
+            "DFEDTARL": [("2026-09-16", 3.50), ("2026-09-15", 3.50)]}
+    monkeypatch.setattr(co, "_fred_series", lambda s, k, limit=15: data[s])
+    out = co.macro_outcome("fomc", "key", event_date="2026-09-16")
+    assert out["lines"][0] == "Fed funds target held at 3.50–3.75%"
+
+
+def test_macro_outcome_without_event_date_skips_freshness(monkeypatch):
+    """Back-compat: callers that pass no event_date get the old behavior (no gate)."""
+    data = {"DFEDTARU": [("2026-08-20", 3.75)], "DFEDTARL": [("2026-08-20", 3.50)]}
+    monkeypatch.setattr(co, "_fred_series", lambda s, k, limit=15: data[s])
+    assert co.macro_outcome("fomc", "key") is not None
+
+
+def test_macro_outcome_gdp_is_not_freshness_gated(monkeypatch):
+    """GDP's advance/second/third estimates reuse the same quarter-start observation
+    date, so a date-gap gate would wrongly drop the later revisions — GDP is ungated
+    even when its observation is months older than the release date."""
+    monkeypatch.setattr(co, "_fred_series",
+                        lambda s, k, limit=15: [("2026-04-01", 1.5), ("2026-01-01", 2.1)])
+    out = co.macro_outcome("gdp", "key", event_date="2026-09-25")  # Q2 third estimate
+    assert out["lines"][0] == "Real GDP 1.5% annualized (prior 2.1%)"
 
 
 # -- earnings beat/miss -----------------------------------------------------

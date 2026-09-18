@@ -66,6 +66,105 @@ def test_window_ignores_unsent_preview_build(tmp_path):
     assert end == "2026-08-04T13:00:00Z"
 
 
+def test_window_rebuild_ignores_todays_own_sent_edition(tmp_path):
+    """Rebuilding today's digest (the console "digest" button, a manual re-run)
+    must anchor on the *previous* edition, never on today's own just-sent row.
+    Anchoring on today collapsed the window to minutes, so `_macro_events` came
+    back empty and the whole "what happened — macro" section dropped out of the
+    regenerated PDF — which overwrites the delivered one on disk. This is the
+    since-last-sent sibling of the two-user macro divergence."""
+    conn = connect(tmp_path / "t.db")
+    now = datetime(2026, 9, 17, 13, 5, tzinfo=timezone.utc)
+    portfolio_id = conn.execute("SELECT id FROM portfolios").fetchone()[0]
+    # Yesterday's sent digest — the real prior coverage boundary.
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-09-16', '2026-09-16T13:00:00Z', '2026-09-16T13:00:05Z', 'y.pdf')",
+        (portfolio_id,),
+    )
+    # Today's digest, already sent at 13:00. The FOMC print (~09-16 18:00Z) landed
+    # inside the 09-16 -> 09-17 window this edition used and rode out in the email.
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-09-17', '2026-09-17T13:00:00Z', '2026-09-17T13:00:04Z', 't.pdf')",
+        (portfolio_id,),
+    )
+    start, end = _window(conn, now, portfolio_id, label_date="2026-09-17")
+    # Previous edition, not today's send — so the rebuild reproduces the FOMC-
+    # covering window rather than a 5-minute one that would drop the macro block.
+    assert start == "2026-09-16T13:00:00Z"
+    assert end == "2026-09-17T13:05:00Z"
+
+
+def test_macro_window_is_fund_wide_and_excludes_todays_edition(tmp_path):
+    """Macro is market-wide, so its window must be identical for every recipient
+    and independent of any single portfolio's send timing — the root fix for
+    members getting different macro coverage edition after edition. It anchors on
+    the most recent *sent* edition across the whole fund, never on today's own."""
+    from avalpha import accounts
+    from avalpha.digest.build import _macro_window
+
+    conn = connect(tmp_path / "t.db")
+    now = datetime(2026, 9, 17, 13, 5, tzinfo=timezone.utc)
+    avi = accounts.resolve_login(conn, accounts.ADMIN_EMAIL)
+    bob = accounts.resolve_login(conn, "bob@example.com")
+    # Yesterday: both members' editions were sent, at slightly different times.
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-09-16', '2026-09-16T13:00:00Z', '2026-09-16T13:00:02Z', 'a.pdf')",
+        (avi.portfolio_id,),
+    )
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-09-16', '2026-09-16T13:00:40Z', '2026-09-16T13:00:42Z', 'b.pdf')",
+        (bob.portfolio_id,),
+    )
+    # Today's admin edition is already sent — it must NOT become the macro anchor.
+    conn.execute(
+        "INSERT INTO digests (portfolio_id, date, built_at, sent_at, pdf_path) VALUES "
+        "(?, '2026-09-17', '2026-09-17T13:00:00Z', '2026-09-17T13:00:03Z', 'c.pdf')",
+        (avi.portfolio_id,),
+    )
+    start, end = _macro_window(conn, now, label_date="2026-09-17")
+    # Most recent *prior* edition across the fund (Bob's later build), not today's.
+    assert start == "2026-09-16T13:00:40Z"
+    assert end == "2026-09-17T13:05:00Z"
+
+
+def test_build_and_send_hands_every_recipient_the_same_macro_block(tmp_path, monkeypatch):
+    """Every portfolio in a run is built from one shared macro block, so macro
+    coverage cannot diverge between members within an edition."""
+    from avalpha import accounts, mailer
+    from avalpha.digest import build as digest_build
+
+    conn = connect(tmp_path / "t.db")
+    accounts.resolve_login(conn, accounts.ADMIN_EMAIL)
+    accounts.resolve_login(conn, "bob@example.com")
+    shared = [{"label": "FOMC decision", "lines": ["Fed funds target held at 3.50–3.75%"],
+               "consensus": None}]
+    monkeypatch.setattr(digest_build, "_macro_block", lambda *a, **k: shared)
+
+    seen = []
+
+    def fake_build(config, db_conn, date_str=None, portfolio_id=None, macro=None):
+        seen.append(macro)
+        path = tmp_path / f"{portfolio_id}.pdf"
+        path.write_bytes(b"%PDF")
+        db_conn.execute(
+            "INSERT INTO digests (portfolio_id, date, built_at, pdf_path) VALUES (?, ?, ?, ?)",
+            (portfolio_id, date_str, utcnow(), str(path)),
+        )
+        db_conn.commit()
+        return path
+
+    monkeypatch.setattr(digest_build, "build_digest", fake_build)
+    monkeypatch.setattr(mailer, "send_digest_email", lambda *a, **k: None)
+    digest_build.build_and_send(_cfg(tmp_path), conn, date_str="2026-09-17")
+
+    assert len(seen) == 2                     # both members built
+    assert all(block is shared for block in seen)  # identical object handed to each
+
+
 def test_digest_date_is_calendar_day_not_prior_trading_day():
     """The digest ships every day, so each calendar day — weekends included —
     must get a distinct identity/dedup key. Keying on the prior trading day
@@ -139,7 +238,7 @@ def test_macro_events_in_window_enriched(tmp_path, monkeypatch):
         status="passed", source="fred", dedup_key=macro_key("fomc", "2026-08-04")))
     conn.commit()
     monkeypatch.setenv("FRED_API_KEY", "k")
-    monkeypatch.setattr(calendar_outcomes, "macro_outcome", lambda kind, key: {
+    monkeypatch.setattr(calendar_outcomes, "macro_outcome", lambda kind, key, event_date=None: {
         "kind": kind, "label": "FOMC decision",
         "lines": ["Fed funds target cut 25 bps to 3.50–3.75%"]})
     monkeypatch.setattr(calendar_outcomes, "macro_consensus", lambda *a: None)
@@ -160,7 +259,7 @@ def test_macro_events_skips_out_of_window(tmp_path, monkeypatch):
     conn.commit()
     monkeypatch.setenv("FRED_API_KEY", "k")
     monkeypatch.setattr(calendar_outcomes, "macro_outcome",
-                        lambda kind, key: {"kind": kind, "label": "CPI", "lines": ["x"]})
+                        lambda kind, key, event_date=None: {"kind": kind, "label": "CPI", "lines": ["x"]})
     assert _macro_events(_cfg(tmp_path), conn, *WIN) == []
 
 
@@ -168,6 +267,27 @@ def test_macro_events_empty_without_fred_key(tmp_path, monkeypatch):
     conn = connect(tmp_path / "t.db")
     monkeypatch.delenv("FRED_API_KEY", raising=False)
     assert _macro_events(_cfg(tmp_path), conn, *WIN) == []
+
+
+def test_llm_text_safe_returns_fallback_on_failure(tmp_path, monkeypatch):
+    """One section's LLM error must degrade to the fallback, not raise and sink
+    the whole digest (so every other section and recipient still ships)."""
+    from avalpha.digest import build as digest_build
+
+    def boom(*a, **k):
+        raise RuntimeError("anthropic overloaded")
+
+    monkeypatch.setattr(digest_build, "_llm_text", boom)
+    out = digest_build._llm_text_safe(_cfg(tmp_path), "p", fallback="FB", label="x")
+    assert out == "FB"
+
+
+def test_llm_text_safe_passes_through_on_success(tmp_path, monkeypatch):
+    from avalpha.digest import build as digest_build
+
+    monkeypatch.setattr(digest_build, "_llm_text", lambda *a, **k: "real narrative")
+    out = digest_build._llm_text_safe(_cfg(tmp_path), "p", fallback="FB", label="x")
+    assert out == "real narrative"
 
 
 def test_earnings_in_window_returns_beat(tmp_path, monkeypatch):
