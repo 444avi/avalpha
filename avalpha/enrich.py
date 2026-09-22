@@ -140,7 +140,18 @@ def llm_enrich(config: Config, ticker: str, cik: str, legal_name: str) -> dict:
             ),
         }
     ]
-    tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": 5}]
+    # allowed_callers=["direct"] is required: this tool version defaults to
+    # permitting programmatic (code-execution) callers, which the scorer model
+    # (Haiku) doesn't support — without it every request 400s. We only need the
+    # model to call web_search directly anyway.
+    tools = [
+        {
+            "type": "web_search_20260209",
+            "name": "web_search",
+            "max_uses": 5,
+            "allowed_callers": ["direct"],
+        }
+    ]
 
     for _ in range(4):
         response = client.messages.create(
